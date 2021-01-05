@@ -90,6 +90,7 @@ public class ReferenceDragFeederConfigurationWizard
     private JPanel panelGeneral;
     private JPanel panelVision;
     private JPanel panelLocations;
+    private JCheckBox chckbxFeedbackEnabled;
     private JCheckBox chckbxVisionEnabled;
     private JPanel panelVisionEnabled;
     private JPanel panelTemplate;
@@ -135,6 +136,7 @@ public class ReferenceDragFeederConfigurationWizard
                         FormSpecs.RELATED_GAP_COLSPEC, FormSpecs.DEFAULT_COLSPEC,},
                 new RowSpec[] {FormSpecs.RELATED_GAP_ROWSPEC, FormSpecs.DEFAULT_ROWSPEC,
                         FormSpecs.RELATED_GAP_ROWSPEC, FormSpecs.DEFAULT_ROWSPEC,
+                        FormSpecs.RELATED_GAP_ROWSPEC, FormSpecs.DEFAULT_ROWSPEC,
                         FormSpecs.RELATED_GAP_ROWSPEC, FormSpecs.DEFAULT_ROWSPEC,}));
 
         lblPartPitch = new JLabel("Part Pitch");
@@ -164,6 +166,9 @@ public class ReferenceDragFeederConfigurationWizard
         textFieldPeelOffActuatorId = new JTextField();
         panelGeneral.add(textFieldPeelOffActuatorId, "8, 6");
         textFieldPeelOffActuatorId.setColumns(5);
+
+        chckbxFeedbackEnabled = new JCheckBox("Feedback?");
+        panelGeneral.add(chckbxFeedbackEnabled, "2, 8");
 
         if (feeder.isPart0402()) {
 	        lbl0402PartDetected = new JLabel("0402 Part DETECTED");
@@ -381,6 +386,7 @@ public class ReferenceDragFeederConfigurationWizard
         addWrappedBinding(feeder, "feedSpeed", textFieldFeedRate, "text", percentConverter);
         addWrappedBinding(feeder, "actuatorName", textFieldActuatorId, "text");
         addWrappedBinding(feeder, "peelOffActuatorName", textFieldPeelOffActuatorId, "text");
+        addWrappedBinding(feeder, "feedback", chckbxFeedbackEnabled, "selected");
 
         MutableLocationProxy feedStartLocation = new MutableLocationProxy();
         bind(UpdateStrategy.READ_WRITE, feeder, "feedStartLocation", feedStartLocation, "location");

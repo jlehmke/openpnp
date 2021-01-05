@@ -25,6 +25,7 @@ import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.io.File;
 import java.io.IOException;
+import java.lang.Integer;
 
 import javax.imageio.ImageIO;
 import javax.swing.Action;
@@ -86,7 +87,9 @@ public class ReferenceDragFeeder extends ReferenceFeeder {
     @Element(required = false)
     protected Vision vision = new Vision();
     @Element(required = false)
-    protected Length backoffDistance = new Length(0, LengthUnit.Millimeters);    
+    protected boolean feedback = false;
+    @Element(required = false)
+    protected Length backoffDistance = new Length(0, LengthUnit.Millimeters);
 
     protected Location pickLocation;
 
@@ -215,7 +218,18 @@ public class ReferenceDragFeeder extends ReferenceFeeder {
 
 	        // retract the pin
 	        actuator.actuate(false);
-            
+
+          // wait for pin to retract
+          if (this.feedback == true) {
+            if (Integer.parseInt(actuator.read()) != 0) {
+                Logger.debug("Waiting for pin to retract...");
+            }
+            while (Integer.parseInt(actuator.read()) != 0) {
+
+            }
+            Logger.debug("Pin retracted.");
+          }
+
             // evaluate for backwards compatibility
             if(this.isPart0402() == true){
                 partPitch = new Length(2, LengthUnit.Millimeters);
@@ -408,6 +422,16 @@ public class ReferenceDragFeeder extends ReferenceFeeder {
         String oldValue = this.peelOffActuatorName;
         this.peelOffActuatorName = actuatorName;
         propertyChangeSupport.firePropertyChange("actuatorName", oldValue, actuatorName);
+    }
+
+    public boolean getFeedback() {
+        return feedback;
+    }
+
+    public void setFeedback(boolean feedback) {
+        boolean oldValue = this.feedback;
+        this.feedback = feedback;
+        propertyChangeSupport.firePropertyChange("feedback", oldValue, feedback);
     }
 
     public Length getBackoffDistance() {
