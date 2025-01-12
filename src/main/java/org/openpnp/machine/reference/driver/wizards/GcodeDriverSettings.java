@@ -35,8 +35,10 @@ import org.openpnp.Translations;
 import org.openpnp.gui.MainFrame;
 import org.openpnp.gui.components.ComponentDecorators;
 import org.openpnp.gui.support.AbstractConfigurationWizard;
+import org.openpnp.gui.support.ActuatorsComboBoxModel;
 import org.openpnp.gui.support.Icons;
 import org.openpnp.gui.support.IntegerConverter;
+import org.openpnp.gui.support.NamedConverter;
 import org.openpnp.gui.support.MessageBoxes;
 import org.openpnp.machine.reference.driver.GcodeDriver;
 import org.openpnp.model.Configuration;
@@ -46,6 +48,7 @@ import org.openpnp.spi.Camera;
 import org.openpnp.spi.Driver.MotionControlType;
 import org.openpnp.spi.HeadMountable;
 import org.openpnp.spi.Nozzle;
+import org.openpnp.spi.base.AbstractMachine;
 import org.openpnp.util.UiUtils;
 import org.simpleframework.xml.Serializer;
 
@@ -56,10 +59,11 @@ import com.jgoodies.forms.layout.RowSpec;
 
 public class GcodeDriverSettings extends AbstractConfigurationWizard {
     private final GcodeDriver driver;
-
     public GcodeDriverSettings(GcodeDriver driver) {
         this.driver = driver;
         
+        AbstractMachine machine = (AbstractMachine) Configuration.get().getMachine();
+
         JPanel settingsPanel = new JPanel();
         settingsPanel.setBorder(new TitledBorder(null, Translations.getString(
                 "GcodeDriverSettings.SettingsPanel.Border.title"), //$NON-NLS-1$
@@ -228,7 +232,16 @@ public class GcodeDriverSettings extends AbstractConfigurationWizard {
 
         loggingGcode = new JCheckBox("");
         settingsPanel.add(loggingGcode, "4, 16");
+
+        JLabel lblReceiveHandlerActuator = new JLabel(Translations.getString(
+                "GcodeDriverSettings.SettingsPanel.ReceiveHandlerActuator.text")); //$NON-NLS-1$
+        lblReceiveHandlerActuator.setToolTipText(Translations.getString(
+                "GcodeDriverSettings.SettingsPanel.ReceiveHandlerActuator.toolTipText")); //$NON-NLS-1$
+        settingsPanel.add(lblReceiveHandlerActuator, "6, 16, right, default");
         
+        receiveHandlerActuator = new JComboBox(new ActuatorsComboBoxModel(machine));
+        settingsPanel.add(receiveHandlerActuator, "8, 16, 1, 1, fill, default");
+
         JLabel label_1 = new JLabel(" ");
         settingsPanel.add(label_1, "10, 18");
         settingsPanel.add(btnDetectFirmware, "2, 20");
@@ -248,7 +261,9 @@ public class GcodeDriverSettings extends AbstractConfigurationWizard {
 
     @Override
     public void createBindings() {
+        AbstractMachine machine = (AbstractMachine) Configuration.get().getMachine();
         IntegerConverter intConverter = new IntegerConverter();
+        NamedConverter<Actuator> actuatorConverter = (new NamedConverter<>(machine.getActuators()));
 
         addWrappedBinding(driver, "motionControlType", motionControlType, "selectedItem");
         addWrappedBinding(driver, "units", unitsCb, "selectedItem");
@@ -263,6 +278,7 @@ public class GcodeDriverSettings extends AbstractConfigurationWizard {
         addWrappedBinding(driver, "supportingPreMove", supportingPreMove, "selected");
         addWrappedBinding(driver, "usingLetterVariables", letterVariables, "selected");
         addWrappedBinding(driver, "loggingGcode", loggingGcode, "selected");
+        addWrappedBinding(driver, "receiveHandlerActuator", receiveHandlerActuator, "selectedItem", actuatorConverter);
         addWrappedBinding(driver, "firmwareConfiguration", firmwareConfiguration, "text");
 
         ComponentDecorators.decorateWithAutoSelect(maxFeedRateTf);
@@ -405,6 +421,7 @@ public class GcodeDriverSettings extends AbstractConfigurationWizard {
         }
     };
     private JComboBox motionControlType;
+    private JComboBox receiveHandlerActuator;
     private JTextField maxFeedRateTf;
     private JTextField commandTimeoutTf;
     private JTextField connectWaitTimeTf;

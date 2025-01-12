@@ -35,6 +35,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.openpnp.ConfigurationListener;
 import org.openpnp.Translations;
 import org.openpnp.gui.support.PropertySheetWizardAdapter;
 import org.openpnp.machine.reference.ReferenceActuator;
@@ -253,6 +254,9 @@ public class GcodeDriver extends AbstractReferenceDriver implements Named {
     @Attribute(required = false)
     protected boolean loggingGcode;
 
+    @Attribute(required = false)
+    protected String receiveHandlerActuatorId;
+
     @Deprecated
     @Element(required = false)
     protected Location homingFiducialLocation = new Location(LengthUnit.Millimeters);
@@ -325,6 +329,19 @@ public class GcodeDriver extends AbstractReferenceDriver implements Named {
     private boolean motionPending;
 
     private PrintWriter gcodeLogger;
+
+    private Actuator receiveHandlerActuator;
+
+    public GcodeDriver() {
+        super();
+        Configuration.get().addListener(new ConfigurationListener.Adapter() {
+            @Override
+            public void configurationLoaded(Configuration configuration) throws Exception {
+                Machine machine = configuration.getMachine();
+                receiveHandlerActuator = machine.getActuator(receiveHandlerActuatorId);
+            }
+        });
+    }
 
     @Commit
     public void commit() {
@@ -1386,19 +1403,24 @@ public class GcodeDriver extends AbstractReferenceDriver implements Named {
         if (regex != null && line.getLine().matches(regex)) {
             errorResponse = line;
         }
-        processPositionReport(line);
+        regex = getCommand(null, CommandType.POSITION_REPORT_REGEX); 
+        if (regex != null && line.getLine().matches(regex)) {
+            processPositionReport(line);
+        }
+        
+        try {
+            if (receiveHandlerActuator != null) {
+                receiveHandlerActuator.actuate(line.getLine());
+            }
+        }
+        catch (Exception e) {
+            throw new Error(e);
+        }
+        
     }
 
     protected boolean processPositionReport(Line line) {
-        String regex = getCommand(null, CommandType.POSITION_REPORT_REGEX); 
-        if (regex == null) {
-            return false;
-        }
-
-        if (!line.getLine().matches(regex)) {
-            return false;
-        }
-
+        String regex = getCommand(null, CommandType.POSITION_REPORT_REGEX);
         Logger.trace("Position report: {}", line);
         ReferenceMachine machine = ((ReferenceMachine) Configuration.get().getMachine());
         Matcher matcher =
@@ -1590,6 +1612,15 @@ public class GcodeDriver extends AbstractReferenceDriver implements Named {
             this.loggingGcode = loggingGcode;
             closeGcodeLogger();
         }
+    }
+
+    public Actuator getReceiveHandlerActuator() {
+        return this.receiveHandlerActuator;
+    }
+
+    public void setReceiveHandlerActuator(Actuator actuator) {
+        this.receiveHandlerActuator = actuator;
+        this.receiveHandlerActuatorId = (actuator == null) ? null : actuator.getId();
     }
 
     public String getDetectedFirmware() {
