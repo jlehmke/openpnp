@@ -64,6 +64,7 @@ import org.openpnp.spi.PnpJobProcessor.JobPlacement.Status;
 import org.openpnp.spi.base.AbstractJobProcessor;
 import org.openpnp.spi.base.AbstractPnpJobProcessor;
 import org.openpnp.util.MovableUtils;
+import org.openpnp.util.TravelCost;
 import org.openpnp.util.TravellingSalesman;
 import org.openpnp.util.UiUtils;
 import org.openpnp.util.Utils2D;
@@ -85,7 +86,8 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
         BoardPart,                  // sort by board id first, then part id
         PickLocation,               // take the shortest route between all pick locations
         PickPlaceLocation,          // optimize all place locations feeder wise for shortest route
-        NozzleTips,                 // group placements by compatible nozzle tips and optimize each group using PickPlaceLocation
+        NozzleTips,                 // group placements by compatible nozzle tips, optimize each group using PickPlaceLocation, tips are sorted by part count
+        NozzleTipsByFlexibility,    // group placements by compatible nozzle tips, optimize each group using PickPlaceLocation, tips are sorted by the count of parts which can be placed by a different tip
         Unsorted;                   // keep the placements unsorted - for hand-optimized jobs
 
         // provide a dedicated toSting() method (with translation) to convert the enum values into
@@ -676,7 +678,8 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                     break;
                     
                 case NozzleTips:
-                    plannedJobPlacementsAndNozzleTips = planJobPlacementsByNozzleTips(jobPlacements);
+                case NozzleTipsByFlexibility:
+                    plannedJobPlacementsAndNozzleTips = planJobPlacementsByNozzleTips(jobPlacements,jobOrder);
                     break;
                     
                 // FIXME: generating a error if not all enum values are handled would be more error resistant
@@ -779,6 +782,12 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                 }
                 catch (Exception e) {
                 }
+            }
+
+            if (feeders.size()==0) {
+                // We were unable to find any feeders, so there is no need for TSM.
+                // We end where we started.
+                return startLocation;
             }
             
             // route pick locations of all feeders through travelling salesman
@@ -909,7 +918,7 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
          * @param input
          * @return
          */
-        private ReturnJobPlacementsAndNozzleTips planJobPlacementsByNozzleTips(List<JobPlacement> input) {
+        private ReturnJobPlacementsAndNozzleTips planJobPlacementsByNozzleTips(List<JobPlacement> input,JobOrderHint jobOrder) {
             /**
              * Group nozzleTip and JobPlacements into one class to collect jobPlacements
              * per nozzleTip for further sorting, filtering and processing.
@@ -971,7 +980,7 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
             
             // sort lists per nozzleTips by their size such that the nozzle tip that can handle
             // the most jobPlacments is first. As second sorting criteria the nozzleTip's name is used.
-            // For mulit-nozzle machines with different nozzleTips for each nozzle that are compatible
+            // For multi-nozzle machines with different nozzleTips for each nozzle that are compatible
             // with the same jobPlacments this always results in groups of identical amounts of
             // jobPlacments. Taking the name into account makes the sorting unique again.
             perNozzleTipJobPlacements.sort(Comparator.comparing(JobPlacementNozzleTip::size).reversed()
@@ -986,7 +995,9 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
             // the other nozzles. Keeping all possible tips sorted by amount of placements they can
             // handle will likely provide a good starting point in selecting the next best one.
             List<NozzleTip> plannedNozzleTips = perNozzleTipJobPlacements.stream().map(j -> j.getNozzleTip()).collect(Collectors.toList());
-            
+
+            HashMap <NozzleTip,Integer> perNozzlePlacementOptions = new HashMap<NozzleTip,Integer>();
+
             // Remove duplicate placements keeping only the first occurrence
             // Skip this step if there is only one nozzle tip left.
             if (perNozzleTipJobPlacements.size() > 1) {
@@ -998,15 +1009,32 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                     for (int j = i + 1; j < perNozzleTipJobPlacements.size(); ++j) {
                         // remove all placements that are in the dominant group
                         JobPlacementNozzleTip recessivePlacements = perNozzleTipJobPlacements.get(j);
+                        int n = recessivePlacements.size();
                         recessivePlacements.removeAll(dominantPlacements);
                         perNozzleTipJobPlacements.set(j, recessivePlacements);
+                        n -= recessivePlacements.size(); // calculate the number of recessive placements removed
+                        if(n>0) {
+                            perNozzlePlacementOptions.put(nozzleTips.get(i), perNozzlePlacementOptions.getOrDefault(nozzleTips.get(i),0) + n);
+                            perNozzlePlacementOptions.put(nozzleTips.get(j), perNozzlePlacementOptions.getOrDefault(nozzleTips.get(j),0) + n);
+                        }
                     }
                 }
                 
                 // remove empty nozzle groups
                 perNozzleTipJobPlacements = perNozzleTipJobPlacements.stream().filter(i -> !i.isEmpty()).collect(Collectors.toList());
             }
-            
+
+            if(jobOrder==JobOrderHint.NozzleTipsByFlexibility) {
+                // It is a bad outcome for a multi-nozzle machine to get stuck running on only a single nozzle.
+                // We do not track enough information to optimise multi-nozzle scenarios, but we have this heuristic to minimise the chance of this occurring.
+                // Inflexible nozzle tips are run first, and the flexible nozzle tips (i.e. those that can handle parts which can also be handled
+                // by other tips) are kept for the end of the job.
+                Logger.trace("perNozzlePlacementOptions {}",perNozzlePlacementOptions);
+                perNozzleTipJobPlacements.sort(Comparator.comparing( (JobPlacementNozzleTip j) -> perNozzlePlacementOptions.getOrDefault(j.getNozzleTip(),0))
+                                                        .thenComparing(Comparator.comparing(JobPlacementNozzleTip::size).reversed())
+                                                        .thenComparing(j -> j.getNozzleTip().getName()));
+            }
+
             // optimize each nozzle tip group using PickPlaceLocation
             output = new ArrayList<JobPlacement>();
             // This variable is the return value of planJobPlacmentsByPickPlaceLocation
@@ -2540,21 +2568,32 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                 Location averagePickLocation  = calcCenterLocation(plannedPlacements, pickLocator);
                 Location averagePlaceLocation = calcCenterLocation(plannedPlacements, placeLocator);
                 
-                // find the placement with the shortest distance to averagePlickLocation and averagePlaceLocation
-                double bestDistance = Double.MAX_VALUE;
-                for (JobPlacement p : compatibleJobPlacements) {
-                    double distance = pickLocator.getLocation(p, nozzle).getLinearDistanceTo(averagePickLocation) 
-                                    + placeLocator.getLocation(p, nozzle).getLinearDistanceTo(averagePlaceLocation);
-
-                    // if this placement is closes with respect to its pick and place 
-                    if (bestDistance > distance) {
-                        bestDistance = distance;
-                        bestPlacement = p;
+                TravelCost travelCost = null;
+                try {
+                    travelCost = new TravelCost(nozzle);
+                }
+                catch (Exception e) {
+                    // ignore exception and continue without optimization
+                    Logger.trace("TravelCost() failed, skipping second placement optimiation");
+                    travelCost = null;
+                }
+                if (travelCost != null) {
+                    // find the placement with the least cost for motion to averagePlickLocation and averagePlaceLocation
+                    double leastCost = Double.MAX_VALUE;
+                    for (JobPlacement p : compatibleJobPlacements) {
+                        double cost = travelCost.getCost(pickLocator.getLocation(p, nozzle), averagePickLocation) 
+                                    + travelCost.getCost(placeLocator.getLocation(p, nozzle), averagePlaceLocation);
+    
+                        // if this placement is closes with respect to its pick and place 
+                        if (leastCost > cost) {
+                            leastCost = cost;
+                            bestPlacement = p;
+                        }
                     }
                 }
             }
-            else {
-                // no further optimization possible or requested, just choose the first of the list
+            // if bestPlacement is still null, use the first
+            if (bestPlacement == null) {
                 bestPlacement = compatibleJobPlacements.get(0);
             }
             
