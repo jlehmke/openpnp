@@ -15,10 +15,7 @@ import javax.swing.JTextField;
 import javax.swing.UIManager;
 import javax.swing.border.TitledBorder;
 
-import org.jdesktop.beansbinding.AutoBinding;
 import org.jdesktop.beansbinding.AutoBinding.UpdateStrategy;
-import org.jdesktop.beansbinding.BeanProperty;
-import org.jdesktop.beansbinding.Bindings;
 import org.openpnp.Translations;
 import org.openpnp.gui.MainFrame;
 import org.openpnp.gui.components.ComponentDecorators;
@@ -137,14 +134,8 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         else if (settingsHolder != null) {
             btnSpecializeSetting.setText(Translations.getString(
                     "BottomVisionSettingsConfigurationWizard.SpecializeSettingsButton.OptimizeText")); //$NON-NLS-1$
-            btnSpecializeSetting.setToolTipText("<html>Optimize the Bottom Vision Settings and their assignments:<br/>"
-                    + "<ul>"
-                    + "<li>Consolidate duplicate settings.</li>"
-                    + "<li>Remove unused settings.</li>"
-                    + "<li>Configure the most common Part settings as inherited Package settings.</li>"
-                    + "<li>Remove assignments where the same settings would be inherited anyway.</li>"
-                    + "</ul>"
-                    + "</html>");
+            btnSpecializeSetting.setToolTipText(Translations.getString(
+                    "BottomVisionSettingsConfigurationWizard.SpecializeSettingsButton.OptimizeText.toolTipText")); //$NON-NLS-1$
         }
         else {
             btnSpecializeSetting.setEnabled(false);
@@ -205,11 +196,13 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
             btnGeneralizeSettings.setText(Translations.getString(
                     "BottomVisionSettingsConfigurationWizard.GeneralizeButton.GeneralizeFor.text") //$NON-NLS-1$
                     + settingsHolder.getShortName());
-            btnGeneralizeSettings.setToolTipText("<html>Generalize these Bottom Vision Settings for all the "
-                    + subjects
-                    + " with the "+ settingsHolder.getClass().getSimpleName()+" "+settingsHolder.getShortName()+".<br/>"
-                    + "This will unassign any special Bottom Vision Settings on "+subjects+" and delete those<br/>"
-                    + "Bottom Vision Settings that are no longer used elsewhere.</html>");
+            btnGeneralizeSettings.setToolTipText(String.format(
+                    Translations.getString("BottomVisionSettingsConfigurationWizard.GeneralizeButton.GeneralizeFor.toolTipText"), //$NON-NLS-1$
+            		subjects,
+            		settingsHolder.getClass().getSimpleName(),
+            		settingsHolder.getShortName(),
+            		subjects));
+                
         }
 
         JButton resetButton = new JButton(Translations.getString(
@@ -338,9 +331,9 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         panelAlign.add(testAlignmentAngle, "4, 2");
         testAlignmentAngle.setColumns(10);
 
-        JButton btnTestAlighment = new JButton(Translations.getString(
+        JButton btnTestAlignment = new JButton(Translations.getString(
                 "BottomVisionSettingsConfigurationWizard.PanelAlign.TestAlignmentButton.text")); //$NON-NLS-1$
-        panelAlign.add(btnTestAlighment, "6, 2");
+        panelAlign.add(btnTestAlignment, "6, 2");
 
         chckbxCenterAfterTest = new JCheckBox(Translations.getString(
                 "BottomVisionSettingsConfigurationWizard.PanelAlign.CenterAfterTestChkbox.text")); //$NON-NLS-1$
@@ -348,9 +341,9 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         chckbxCenterAfterTest.setToolTipText(Translations.getString(
                 "BottomVisionSettingsConfigurationWizard.PanelAlign.CenterAfterTestChkbox.toolTipText")); //$NON-NLS-1$
         chckbxCenterAfterTest.setSelected(true);
-        btnTestAlighment.addActionListener((e) -> {
+        btnTestAlignment.addActionListener((e) -> {
+            applyAction.actionPerformed(null);
             UiUtils.submitUiMachineTask(() -> {
-                applyAction .actionPerformed(null);
                 testAlignment(chckbxCenterAfterTest.isSelected());
             });
         });
@@ -412,8 +405,8 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         btnAutoVisionCenterOffset.setToolTipText(Translations.getString(
                 "BottomVisionSettingsConfigurationWizard.PanelDetectOffset.AutoVisionCenterOffsetButton.toolTipText")); //$NON-NLS-1$
         btnAutoVisionCenterOffset.addActionListener((e) -> {
+            applyAction.actionPerformed(null);
             UiUtils.submitUiMachineTask(() -> {
-                applyAction.actionPerformed(null);
                 determineVisionOffset();
             });
         });
