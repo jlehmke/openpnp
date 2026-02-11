@@ -50,6 +50,8 @@ import org.openpnp.model.PanelLocation;
 import org.openpnp.model.Part;
 import org.openpnp.model.Placement;
 import org.openpnp.model.PlacementsHolderLocation;
+import org.openpnp.spi.CameraBatchOperation;
+import org.openpnp.spi.Feeder;
 import org.openpnp.spi.Feeder;
 import org.openpnp.spi.FiducialLocator;
 import org.openpnp.spi.Head;
@@ -169,6 +171,8 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
     protected Location previousPickPlanStartLocation;
     protected Location previousPlacePlanStartLocation;
 
+    private boolean cameraBatchOperationStarted;
+
     long startTime;
     int totalPartsPlaced;
     
@@ -215,6 +219,18 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
     }
 
     public synchronized void abort() throws JobProcessorException {
+        try {
+            if (cameraBatchOperationStarted) {
+                cameraBatchOperationStarted = false;
+                machine.getCameraBatchOperation().endBatchOperation("job abort");
+            }
+        }
+        catch (Exception e) {
+            // We swallow the error here because if we can't turn the light off there's not really much
+            // we can do. We have to do the rest of the cleanup and end the job.
+            Logger.error(e);
+        }
+
         try {
             new Cleanup().step();
         }
@@ -1305,7 +1321,8 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
              * that will get thrown. 
              */
             JobProcessorException lastException = null;
-            for (int partPickTry = 0; partPickTry < 1 + part.getPickRetryCount(); partPickTry++) {
+            int tryLimit = 1 + part.getPickRetryCount();
+            for (int partPickTry = 0; partPickTry < tryLimit; partPickTry++) {
 
                 if (nozzle.getPart() == null) {
                     // We expect the nozzle to be empty before a pick.
@@ -1352,6 +1369,18 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                 try {
                     feed(feeder, nozzle);
                 }
+                catch (Feeder.FeederEmptyException e) {
+                    if (tryLimit==1) {
+                        // We are configured to not allow any retries of failed feeds, but
+                        // the FeederEmptyException is different because this is an expected
+                        // condition, not an error, so we allow one "retry".
+                        // The feed method will have disabled the feeder that just raised
+                        // the exception, so the next attempt can swap to a different feeder.
+                        tryLimit = 2;
+                    }
+                    lastException = new JobProcessorException(feeder,e);
+                    continue;
+                }
                 catch (JobProcessorException jpe) {
                     lastException = jpe;
                     continue;
@@ -1388,7 +1417,7 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
             throw lastException;
         }
         
-        private void feed(Feeder feeder, Nozzle nozzle) throws JobProcessorException {
+        private void feed(Feeder feeder, Nozzle nozzle) throws JobProcessorException, Feeder.FeederEmptyException {
             Exception lastException = null;
 
             Map<String, Object> globals = new HashMap<>();
@@ -1404,6 +1433,12 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                     feeder.feed(nozzle);
                     Configuration.get().getScripting().on("Feeder.AfterFeed", globals);
                     return;
+                }
+                catch (Feeder.FeederEmptyException e) {
+                    // This exception gets handled in the outer retry loop
+                    Logger.info("{} disabled due to being empty {}",feeder,e);
+                    feeder.setEnabled(false);
+                    throw e;
                 }
                 catch (Exception e) {
                     lastException = e;
@@ -1531,6 +1566,33 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
             
             prerotateAllNozzles(alignLocator);
             
+            return new StartCameraBatchOperation(plannedPlacements);
+        }
+    }
+
+    /**
+     * Start a camera batch operation.
+     * Should any lights get turned on during an alignment, they remain on for the subsequent alignments.
+     */
+    protected class StartCameraBatchOperation implements Step {
+        protected List<PlannedPlacement> plannedPlacements;
+
+        protected StartCameraBatchOperation(List<PlannedPlacement> plannedPlacements) {
+            this.plannedPlacements = plannedPlacements;
+        }
+
+        public Step step() throws JobProcessorException {
+            if (cameraBatchOperationStarted) {
+                // unexpected!
+            } else {
+                CameraBatchOperation cbo = machine.getCameraBatchOperation();
+                if (cbo!=null)
+                {
+                    cbo.startBatchOperation("align step");
+                    cameraBatchOperationStarted = true;
+                }
+            }
+
             return new Align(plannedPlacements);
         }
     }
@@ -1546,9 +1608,9 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
         @Override
         public Step stepImpl(PlannedPlacement plannedPlacement) throws JobProcessorException {
             if (plannedPlacement == null) {
-                return new OptimizeNozzlesForPlace(plannedPlacements);
+                return new EndCameraBatchOperation(plannedPlacements);
             }
-            
+
             final Nozzle nozzle = plannedPlacement.nozzle;
             final JobPlacement jobPlacement = plannedPlacement.jobPlacement;
             final Placement placement = jobPlacement.getPlacement();
@@ -1610,6 +1672,32 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
             catch (Exception e) {
                 throw new JobProcessorException(nozzle, e);
             }
+        }
+    }
+
+    /**
+     * End a camera batch operation.
+     * Turn of fall the light used during alignment.
+     */
+    protected class EndCameraBatchOperation implements Step {
+        protected List<PlannedPlacement> plannedPlacements;
+
+        protected EndCameraBatchOperation(List<PlannedPlacement> plannedPlacements) {
+            this.plannedPlacements = plannedPlacements;
+        }
+
+        public Step step() throws JobProcessorException {
+            if (cameraBatchOperationStarted) {
+                cameraBatchOperationStarted = false;
+                try {
+                    machine.getCameraBatchOperation().endBatchOperation("align step");
+                }
+                catch (Exception e) {
+                    throw new JobProcessorException(machine, "Error in EndCameraBatchOperation");
+                }
+            }
+
+            return new OptimizeNozzlesForPlace(plannedPlacements);
         }
     }
 
@@ -2430,7 +2518,7 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
         protected PlannedPlacementStep(List<PlannedPlacement> plannedPlacements) {
             this.plannedPlacements = plannedPlacements;
         }
-        
+
         /**
          * Process the step for the given planned placement. The method should perform everything
          * that needs to be done with that planned placement before returning. If there is an
@@ -2739,12 +2827,19 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                     nozzleCount += 1;
                     if (nozzleCount==2 && plannerState.plannedPlacements.size()==2 && plannerState.plannedPlacements.get(1).planningCost!=null) {
                         PlannerState plannerStateAlt = new PlannerState(jobPlacements,head.getNozzles(),nozzleTips);
-                        plannerStateAlt.addPlannedPlacement(planWithoutNozzleTipChange(plannerState.plannedPlacements.get(1).nozzle,plannerStateAlt));
-                        plannerStateAlt.addPlannedPlacement(planWithoutNozzleTipChange(plannerState.plannedPlacements.get(0).nozzle,plannerStateAlt));
-                        if(plannerStateAlt.plannedPlacements.get(1).planningCost != null &&
-                           plannerStateAlt.plannedPlacements.get(1).planningCost<plannerState.plannedPlacements.get(1).planningCost) {
-                            Logger.debug("Alternate plan accepted {} better than {}",plannerStateAlt.plannedPlacements, plannerState.plannedPlacements);
-                            plannerState = plannerStateAlt;
+                        PlannedPlacement pp;
+                        pp = planWithoutNozzleTipChange(plannerState.plannedPlacements.get(1).nozzle,plannerStateAlt);
+                        if (pp != null) {
+                            plannerStateAlt.addPlannedPlacement(pp);
+                            pp = planWithoutNozzleTipChange(plannerState.plannedPlacements.get(0).nozzle,plannerStateAlt);
+                            if (pp != null) {
+                                plannerStateAlt.addPlannedPlacement(pp);
+                                if(plannerStateAlt.plannedPlacements.get(1).planningCost != null &&
+                                plannerStateAlt.plannedPlacements.get(1).planningCost<plannerState.plannedPlacements.get(1).planningCost) {
+                                    Logger.debug("Alternate plan accepted {} better than {}",plannerStateAlt.plannedPlacements, plannerState.plannedPlacements);
+                                    plannerState = plannerStateAlt;
+                                }
+                            }
                         }
                     }
                 }
