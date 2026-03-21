@@ -63,6 +63,7 @@ import javax.swing.table.TableRowSorter;
 
 import org.openpnp.Translations;
 import org.openpnp.gui.components.AutoSelectTextTable;
+import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.gui.support.AbstractConfigurationWizard;
 import org.openpnp.gui.support.ActionGroup;
 import org.openpnp.gui.support.Helpers;
@@ -86,6 +87,8 @@ import org.openpnp.model.Configuration.TablesLinked;
 import org.openpnp.model.FiducialVisionSettings;
 import org.openpnp.model.Part;
 import org.openpnp.spi.Feeder;
+import org.openpnp.spi.Machine;
+import org.openpnp.spi.PartDatabase;
 import org.openpnp.spi.FiducialLocator;
 import org.openpnp.spi.PartAlignment;
 import org.openpnp.util.UiUtils;
@@ -119,7 +122,8 @@ public class PartsPanel extends JPanel implements WizardContainer {
         this.configuration = configuration;
         this.frame = frame;
 
-        singleSelectionActionGroup = new ActionGroup(deletePartAction, pickPartAction, copyPartToClipboardAction);
+        singleSelectionActionGroup = new ActionGroup(deletePartAction, pickPartAction, copyPartToClipboardAction,
+                updateFromPartDbAction, pushToPartDbAction);
         singleSelectionActionGroup.setEnabled(false);
         multiSelectionActionGroup = new ActionGroup(deletePartAction);
         multiSelectionActionGroup.setEnabled(false);
@@ -231,6 +235,11 @@ public class PartsPanel extends JPanel implements WizardContainer {
         JButton btnNewButton_1 = new JButton(pastePartToClipboardAction);
         btnNewButton_1.setHideActionText(true);
         toolBar.add(btnNewButton_1);
+
+        toolBar.addSeparator();
+        toolBar.add(importFromPartDbAction);
+        toolBar.add(updateFromPartDbAction);
+        toolBar.add(pushToPartDbAction);
 
         table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
             @Override
@@ -461,6 +470,95 @@ public class PartsPanel extends JPanel implements WizardContainer {
             }
         }
     };
+    /** Run a task on a daemon thread; show an error dialog on the EDT if it throws. */
+    private PartDatabase getPartDb() {
+        Machine machine = Configuration.get().getMachine();
+        if (machine instanceof ReferenceMachine) {
+            PartDatabase db = ((ReferenceMachine) machine).getPartDatabase();
+            if (db != null && db.isConnected()) {
+                return db;
+            }
+        }
+        return null;
+    }
+
+    public final Action importFromPartDbAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbAdd);
+            putValue(NAME, "Import from PartDB");
+            putValue(SHORT_DESCRIPTION, "Import a part from the external part database by name.");
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            PartDatabase db = getPartDb();
+            if (db == null) {
+                MessageBoxes.errorBox(getTopLevelAncestor(), "Error",
+                        "No part database connected. Configure it in Machine Setup.");
+                return;
+            }
+            String name = JOptionPane.showInputDialog(frame,
+                    "Enter the PartDB part name to import:");
+            if (name == null || name.trim().isEmpty()) {
+                return;
+            }
+            UiUtils.messageBoxOnException(() -> {
+                Part part = db.importPart(name.trim());
+                tableModel.fireTableDataChanged();
+                Helpers.selectObjectTableRow(table, part);
+            });
+        }
+    };
+
+    public final Action updateFromPartDbAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbPull);
+            putValue(NAME, "Update from PartDB");
+            putValue(SHORT_DESCRIPTION, "Refresh the selected part's fields from the external part database.");
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            PartDatabase db = getPartDb();
+            if (db == null) {
+                MessageBoxes.errorBox(getTopLevelAncestor(), "Error",
+                        "No part database connected. Configure it in Machine Setup.");
+                return;
+            }
+            Part part = getSelectedPart();
+            if (part == null) {
+                return;
+            }
+            UiUtils.messageBoxOnException(() -> {
+                db.updatePart(part);
+                tableModel.fireTableDataChanged();
+            });
+        }
+    };
+
+    public final Action pushToPartDbAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbPush);
+            putValue(NAME, "Push to PartDB");
+            putValue(SHORT_DESCRIPTION, "Update the selected part in the external part database.");
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            PartDatabase db = getPartDb();
+            if (db == null) {
+                MessageBoxes.errorBox(getTopLevelAncestor(), "Error",
+                        "No part database connected. Configure it in Machine Setup.");
+                return;
+            }
+            Part part = getSelectedPart();
+            if (part == null) {
+                return;
+            }
+            UiUtils.messageBoxOnException(() -> db.pushPart(part));
+        }
+    };
+
     private int selectedTab;
     private String priorPartId;
 

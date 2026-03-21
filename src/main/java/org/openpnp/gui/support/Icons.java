@@ -129,6 +129,10 @@ public class Icons {
     public static Icon footprintToggle = getIcon("/icons/footprint-mark.svg");
     public static Icon kicad = getIcon("/icons/kicad-logo.svg");
 
+    public static Icon partDbAdd = getIcon("/icons/partdb-add.svg");
+    public static Icon partDbPull = getIcon("/icons/partdb-pull.svg");
+    public static Icon partDbPush = getIcon("/icons/partdb-push.svg");
+
     public static Icon getIcon(String resourceName, int width, int height) {
         if (resourceName.endsWith(".svg")) {
             return new FlatSVGIcon(resourceName.substring(1), width, height);

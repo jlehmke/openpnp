@@ -111,6 +111,7 @@ import org.openpnp.spi.MotionPlanner;
 import org.openpnp.spi.MotionPlanner.CompletionType;
 import org.openpnp.spi.Nozzle;
 import org.openpnp.spi.PartAlignment;
+import org.openpnp.spi.PartDatabase;
 import org.openpnp.spi.PnpJobProcessor;
 import org.openpnp.spi.PropertySheetHolder;
 import org.openpnp.spi.Signaler;
@@ -142,6 +143,9 @@ public class ReferenceMachine extends AbstractMachine {
 
     @Element(required = false)
     private KicadLibrary kicadLibrary = new KicadLibrary();
+
+    @Element(required = false)
+    protected PartDatabase partDatabase = null;
 
     @Element(required = false)
     private boolean homeAfterEnabled = false;
@@ -306,6 +310,16 @@ public class ReferenceMachine extends AbstractMachine {
         return kicadLibrary;
     }
 
+    public PartDatabase getPartDatabase() {
+        return partDatabase;
+    }
+
+    public void setPartDatabase(PartDatabase partDatabase) {
+        Object oldValue = this.partDatabase;
+        this.partDatabase = partDatabase;
+        firePropertyChange("partDatabase", oldValue, partDatabase);
+    }
+
     @Override
     public boolean isAutoToolSelect() {
         return autoToolSelect;
@@ -399,6 +413,9 @@ public class ReferenceMachine extends AbstractMachine {
                 "ReferenceMachine.PropertySheetHolder.JobProcessors.title"), Arrays.asList(getPnpJobProcessor()))); //$NON-NLS-1$
         children.add(new SimplePropertySheetHolder("Integrations",
                 Arrays.asList(kicadLibrary)));
+        if (partDatabase != null) {
+            children.add(partDatabase);
+        }
 
         List<PropertySheetHolder> vision = new ArrayList<>();
         for (PartAlignment alignment : getPartAlignments()) {
