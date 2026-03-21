@@ -1,7 +1,9 @@
 package org.openpnp.machine.reference;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.util.List;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,8 +18,10 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.openpnp.gui.importer.KicadModImporter;
 import org.openpnp.gui.support.Wizard;
 import org.openpnp.machine.reference.wizards.PartDbDatabaseWizard;
+import org.openpnp.model.Footprint;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
@@ -25,6 +29,7 @@ import org.openpnp.model.Package;
 import org.openpnp.model.Part;
 import org.openpnp.spi.base.AbstractPartDatabase;
 import org.pmw.tinylog.Logger;
+import org.simpleframework.xml.Attribute;
 import org.simpleframework.xml.Root;
 import org.simpleframework.xml.core.Commit;
 
@@ -41,6 +46,19 @@ public class PartDbDatabase extends AbstractPartDatabase {
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
+
+    @Attribute(required = false)
+    private String kicadLibraryPath = "";
+
+    public String getKicadLibraryPath() {
+        return kicadLibraryPath;
+    }
+
+    public void setKicadLibraryPath(String path) {
+        Object old = this.kicadLibraryPath;
+        this.kicadLibraryPath = path;
+        firePropertyChange("kicadLibraryPath", old, path);
+    }
 
     @SuppressWarnings("deprecation")
     private static final JsonParser JSON_PARSER = new JsonParser();
@@ -126,6 +144,33 @@ public class PartDbDatabase extends AbstractPartDatabase {
     // Internal helpers
     // -------------------------------------------------------------------------
 
+    private void importKicadPads(Package pkg, String kicadFootprint) {
+        if (kicadLibraryPath == null || kicadLibraryPath.isEmpty() || kicadFootprint == null) {
+            return;
+        }
+        if (!kicadFootprint.contains(":")) {
+            Logger.debug("PartDB: kicad_footprint '{}' has no library prefix, skipping pad import", kicadFootprint);
+            return;
+        }
+        String[] parts = kicadFootprint.split(":", 2);
+        File kicadFile = new File(kicadLibraryPath, parts[0] + ".pretty/" + parts[1] + ".kicad_mod");
+        if (!kicadFile.exists()) {
+            Logger.debug("PartDB: KiCad file not found: {}", kicadFile);
+            return;
+        }
+        try {
+            List<Footprint.Pad> pads = new KicadModImporter(kicadFile).getPads();
+            Footprint fp = pkg.getFootprint();
+            fp.getPads().clear();
+            for (Footprint.Pad pad : pads) {
+                fp.addPad(pad);
+            }
+            Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), kicadFile.getName());
+        } catch (Exception e) {
+            Logger.warn("PartDB: could not import KiCad pads from '{}': {}", kicadFile, e.getMessage());
+        }
+    }
+
     private JsonObject findPartByName(String name) throws Exception {
         String json = request("GET", "/api/parts/?name=" + urlEncode(name), null);
         JsonArray results = parseArray(json);
@@ -150,18 +195,58 @@ public class PartDbDatabase extends AbstractPartDatabase {
         // Extract package name and height from the detail response.
         String newPkgName = null;
         Length newHeight = null;
+        String newKicadFootprint = null;
         if (data.has("id")) {
             try {
                 String detailJson = request("GET", "/api/parts/" + data.get("id").getAsInt(), null);
                 JsonObject detail = parseObject(detailJson);
 
+                int footprintId = -1;
                 if (detail.has("footprint") && !detail.get("footprint").isJsonNull()) {
-                    JsonObject footprint = detail.getAsJsonObject("footprint");
-                    if (footprint.has("name")) {
-                        String fpName = footprint.get("name").getAsString();
+                    JsonObject footprintObj = detail.getAsJsonObject("footprint");
+                    if (footprintObj.has("name")) {
+                        String fpName = footprintObj.get("name").getAsString();
                         if (!fpName.isEmpty()) {
                             newPkgName = fpName;
                         }
+                    }
+                    if (footprintObj.has("id")) {
+                        footprintId = footprintObj.get("id").getAsInt();
+                    }
+                }
+
+                if (detail.has("eda_info") && !detail.get("eda_info").isJsonNull()) {
+                    JsonElement edaInfoEl = detail.get("eda_info");
+                    JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
+                            ? edaInfoEl.getAsJsonArray().get(0).getAsJsonObject()
+                            : edaInfoEl.isJsonObject() ? edaInfoEl.getAsJsonObject() : null;
+                    if (edaInfo != null && edaInfo.has("kicad_footprint") && !edaInfo.get("kicad_footprint").isJsonNull()) {
+                        String kfp = edaInfo.get("kicad_footprint").getAsString();
+                        if (!kfp.isEmpty()) {
+                            newKicadFootprint = kfp;
+                        }
+                    }
+                }
+
+                // Fallback: fetch footprint detail and check its eda_info
+                if (newKicadFootprint == null && footprintId >= 0) {
+                    try {
+                        String fpJson = request("GET", "/api/footprints/" + footprintId, null);
+                        JsonObject fpDetail = parseObject(fpJson);
+                        if (fpDetail.has("eda_info") && !fpDetail.get("eda_info").isJsonNull()) {
+                            JsonElement edaInfoEl = fpDetail.get("eda_info");
+                            JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
+                                    ? edaInfoEl.getAsJsonArray().get(0).getAsJsonObject()
+                                    : edaInfoEl.isJsonObject() ? edaInfoEl.getAsJsonObject() : null;
+                            if (edaInfo != null && edaInfo.has("kicad_footprint") && !edaInfo.get("kicad_footprint").isJsonNull()) {
+                                String kfp = edaInfo.get("kicad_footprint").getAsString();
+                                if (!kfp.isEmpty()) {
+                                    newKicadFootprint = kfp;
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        Logger.debug("PartDB: could not fetch footprint detail: {}", e.getMessage());
                     }
                 }
 
@@ -188,6 +273,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
         final String fName = newName;
         final String fPkgName = newPkgName;
         final Length fHeight = newHeight;
+        final String fKicadFootprint = newKicadFootprint;
         Runnable applyChanges = () -> {
             if (fName != null) {
                 part.setName(fName);
@@ -200,6 +286,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     Logger.info("PartDB: created package '{}'", fPkgName);
                 }
                 part.setPackage(existing);
+                importKicadPads(existing, fKicadFootprint);
             }
             if (fHeight != null) {
                 part.setHeight(fHeight);
