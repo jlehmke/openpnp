@@ -3,6 +3,7 @@ package org.openpnp.machine.reference;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -99,6 +100,19 @@ public class PartDbDatabase extends AbstractPartDatabase {
     // -------------------------------------------------------------------------
     // Import / Update / Push
     // -------------------------------------------------------------------------
+
+    @Override
+    public List<String> searchParts(String query) throws Exception {
+        // PartDB's name filter supports SQL LIKE wildcards: %25 = '%' (matches anything).
+        // Wrap with % on both sides for a contains-search.
+        String json = request("GET", "/api/parts/?name=%25" + urlEncode(query) + "%25", null);
+        JsonArray results = parseArray(json);
+        List<String> names = new ArrayList<>();
+        for (JsonElement el : results) {
+            names.add(el.getAsJsonObject().get("name").getAsString());
+        }
+        return names;
+    }
 
     @Override
     public Part importPart(String name) throws Exception {

@@ -497,13 +497,14 @@ public class PartsPanel extends JPanel implements WizardContainer {
                         "No part database connected. Configure it in Machine Setup.");
                 return;
             }
-            String name = JOptionPane.showInputDialog(frame,
-                    "Enter the PartDB part name to import:");
-            if (name == null || name.trim().isEmpty()) {
+            PartDbSearchDialog dialog = new PartDbSearchDialog(frame, db);
+            dialog.setVisible(true);
+            String name = dialog.getSelectedName();
+            if (name == null) {
                 return;
             }
             UiUtils.messageBoxOnException(() -> {
-                Part part = db.importPart(name.trim());
+                Part part = db.importPart(name);
                 tableModel.fireTableDataChanged();
                 Helpers.selectObjectTableRow(table, part);
             });

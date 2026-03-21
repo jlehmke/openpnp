@@ -1,5 +1,7 @@
 package org.openpnp.spi;
 
+import java.util.List;
+
 import org.openpnp.model.Part;
 
 /**
@@ -40,4 +42,13 @@ public interface PartDatabase extends WizardConfigurable, PropertySheetHolder {
      * Create or update the given OpenPnP part in the external database.
      */
     void pushPart(Part part) throws Exception;
+
+    /**
+     * Search for parts whose name contains the given query (case-insensitive).
+     * Returns a list of matching part names. Default implementation throws
+     * UnsupportedOperationException.
+     */
+    default List<String> searchParts(String query) throws Exception {
+        throw new UnsupportedOperationException("searchParts not supported by this database");
+    }
 }
