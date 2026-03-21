@@ -73,5 +73,12 @@ public class FootprintReticle implements Reticle {
         // Transform the Shape and draw it out.
         shape = tx.createTransformedShape(shape);
         g2d.draw(shape);
+
+        // Draw body outline in green.
+        Shape bodyShape = footprint.getBodyShape();
+        if (bodyShape != null) {
+            g2d.setColor(Color.green);
+            g2d.draw(tx.createTransformedShape(bodyShape));
+        }
     }
 }
