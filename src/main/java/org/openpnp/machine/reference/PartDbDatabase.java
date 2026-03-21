@@ -228,12 +228,27 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     }
                 }
 
-                // Fallback: fetch footprint detail and check its eda_info
-                if (newKicadFootprint == null && footprintId >= 0) {
+                if (detail.has("parameters")) {
+                    for (JsonElement el : detail.getAsJsonArray("parameters")) {
+                        JsonObject param = el.getAsJsonObject();
+                        if ("height".equalsIgnoreCase(param.get("name").getAsString())) {
+                            if (param.has("value_typical") && !param.get("value_typical").isJsonNull()) {
+                                double h = param.get("value_typical").getAsDouble();
+                                if (h > 0) {
+                                    newHeight = new Length(h, LengthUnit.Millimeters);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback: fetch footprint detail for missing kicad_footprint or height
+                if (footprintId >= 0 && (newKicadFootprint == null || newHeight == null)) {
                     try {
                         String fpJson = request("GET", "/api/footprints/" + footprintId, null);
                         JsonObject fpDetail = parseObject(fpJson);
-                        if (fpDetail.has("eda_info") && !fpDetail.get("eda_info").isJsonNull()) {
+                        if (newKicadFootprint == null && fpDetail.has("eda_info") && !fpDetail.get("eda_info").isJsonNull()) {
                             JsonElement edaInfoEl = fpDetail.get("eda_info");
                             JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
                                     ? edaInfoEl.getAsJsonArray().get(0).getAsJsonObject()
@@ -245,22 +260,32 @@ public class PartDbDatabase extends AbstractPartDatabase {
                                 }
                             }
                         }
+                        if (newHeight == null && fpDetail.has("parameters")) {
+                            for (JsonElement el : fpDetail.getAsJsonArray("parameters")) {
+                                JsonObject param = el.getAsJsonObject();
+                                if ("height".equalsIgnoreCase(param.get("name").getAsString())) {
+                                    JsonObject paramDetail = param;
+                                    if (!param.has("value_typical") && param.has("id")) {
+                                        try {
+                                            String pdJson = request("GET", "/api/parameters/" + param.get("id").getAsInt(), null);
+                                            paramDetail = parseObject(pdJson);
+                                        } catch (Exception e) {
+                                            Logger.debug("PartDB: could not fetch parameter detail: {}", e.getMessage());
+                                        }
+                                    }
+                                    if (paramDetail.has("value_typical") && !paramDetail.get("value_typical").isJsonNull()) {
+                                        double h = paramDetail.get("value_typical").getAsDouble();
+                                        if (h > 0) {
+                                            newHeight = new Length(h, LengthUnit.Millimeters);
+                                            Logger.debug("PartDB: using height from footprint parameters");
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     } catch (Exception e) {
                         Logger.debug("PartDB: could not fetch footprint detail: {}", e.getMessage());
-                    }
-                }
-
-                if (detail.has("parameters")) {
-                    for (JsonElement el : detail.getAsJsonArray("parameters")) {
-                        JsonObject param = el.getAsJsonObject();
-                        if ("height".equalsIgnoreCase(param.get("name").getAsString())
-                                && param.has("value_typical") && !param.get("value_typical").isJsonNull()) {
-                            double h = param.get("value_typical").getAsDouble();
-                            if (h > 0) {
-                                newHeight = new Length(h, LengthUnit.Millimeters);
-                            }
-                            break;
-                        }
                     }
                 }
             } catch (Exception e) {
