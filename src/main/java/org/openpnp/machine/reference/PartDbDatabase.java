@@ -192,9 +192,10 @@ public class PartDbDatabase extends AbstractPartDatabase {
         }
 
         // Always fetch the part detail — the search result omits parameters and may omit footprint.
-        // Extract package name and height from the detail response.
         String newPkgName = null;
         Length newHeight = null;
+        Double newBodyWidth = null;
+        Double newBodyLength = null;
         String newKicadFootprint = null;
         if (data.has("id")) {
             try {
@@ -228,26 +229,15 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     }
                 }
 
-                if (detail.has("parameters")) {
-                    for (JsonElement el : detail.getAsJsonArray("parameters")) {
-                        JsonObject param = el.getAsJsonObject();
-                        if ("height".equalsIgnoreCase(param.get("name").getAsString())) {
-                            if (param.has("value_typical") && !param.get("value_typical").isJsonNull()) {
-                                double h = param.get("value_typical").getAsDouble();
-                                if (h > 0) {
-                                    newHeight = new Length(h, LengthUnit.Millimeters);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
+                JsonArray partParams = detail.has("parameters") ? detail.getAsJsonArray("parameters") : null;
 
-                // Fallback: fetch footprint detail for missing kicad_footprint or height
-                if (footprintId >= 0 && (newKicadFootprint == null || newHeight == null)) {
+                // Fetch footprint detail once for eda_info fallback and footprint-level parameters.
+                JsonArray fpParams = null;
+                if (footprintId >= 0) {
                     try {
                         String fpJson = request("GET", "/api/footprints/" + footprintId, null);
                         JsonObject fpDetail = parseObject(fpJson);
+                        fpParams = fpDetail.has("parameters") ? fpDetail.getAsJsonArray("parameters") : null;
                         if (newKicadFootprint == null && fpDetail.has("eda_info") && !fpDetail.get("eda_info").isJsonNull()) {
                             JsonElement edaInfoEl = fpDetail.get("eda_info");
                             JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
@@ -260,44 +250,29 @@ public class PartDbDatabase extends AbstractPartDatabase {
                                 }
                             }
                         }
-                        if (newHeight == null && fpDetail.has("parameters")) {
-                            for (JsonElement el : fpDetail.getAsJsonArray("parameters")) {
-                                JsonObject param = el.getAsJsonObject();
-                                if ("height".equalsIgnoreCase(param.get("name").getAsString())) {
-                                    JsonObject paramDetail = param;
-                                    if (!param.has("value_typical") && param.has("id")) {
-                                        try {
-                                            String pdJson = request("GET", "/api/parameters/" + param.get("id").getAsInt(), null);
-                                            paramDetail = parseObject(pdJson);
-                                        } catch (Exception e) {
-                                            Logger.debug("PartDB: could not fetch parameter detail: {}", e.getMessage());
-                                        }
-                                    }
-                                    if (paramDetail.has("value_typical") && !paramDetail.get("value_typical").isJsonNull()) {
-                                        double h = paramDetail.get("value_typical").getAsDouble();
-                                        if (h > 0) {
-                                            newHeight = new Length(h, LengthUnit.Millimeters);
-                                            Logger.debug("PartDB: using height from footprint parameters");
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
                     } catch (Exception e) {
                         Logger.debug("PartDB: could not fetch footprint detail: {}", e.getMessage());
                     }
                 }
+
+                Double h = resolveParamValue("height", partParams, fpParams);
+                if (h != null) {
+                    newHeight = new Length(h, LengthUnit.Millimeters);
+                }
+                newBodyWidth  = resolveParamValue("width",  partParams, fpParams);
+                newBodyLength = resolveParamValue("length", partParams, fpParams);
+
             } catch (Exception e) {
                 Logger.debug("PartDB: could not fetch part detail: {}", e.getMessage());
             }
         }
 
         // Apply all model changes on the EDT to avoid Swing threading violations.
-        // Use invokeAndWait only when called from a background thread; run directly when already on EDT.
         final String fName = newName;
         final String fPkgName = newPkgName;
         final Length fHeight = newHeight;
+        final Double fBodyWidth = newBodyWidth;
+        final Double fBodyLength = newBodyLength;
         final String fKicadFootprint = newKicadFootprint;
         Runnable applyChanges = () -> {
             if (fName != null) {
@@ -312,6 +287,12 @@ public class PartDbDatabase extends AbstractPartDatabase {
                 }
                 part.setPackage(existing);
                 importKicadPads(existing, fKicadFootprint);
+                if (fBodyWidth != null) {
+                    existing.getFootprint().setBodyWidth(fBodyWidth);
+                }
+                if (fBodyLength != null) {
+                    existing.getFootprint().setBodyHeight(fBodyLength);
+                }
             }
             if (fHeight != null) {
                 part.setHeight(fHeight);
@@ -322,6 +303,39 @@ public class PartDbDatabase extends AbstractPartDatabase {
         } else {
             SwingUtilities.invokeAndWait(applyChanges);
         }
+    }
+
+    /** Returns the value_typical of the first parameter matching {@code name} (case-insensitive),
+     *  fetching the full parameter detail if needed. Returns null if not found or value <= 0. */
+    private Double fetchParamValue(JsonArray params, String name) {
+        if (params == null) {
+            return null;
+        }
+        for (JsonElement el : params) {
+            JsonObject p = el.getAsJsonObject();
+            if (name.equalsIgnoreCase(p.get("name").getAsString())) {
+                JsonObject full = p;
+                if (!p.has("value_typical") && p.has("id")) {
+                    try {
+                        full = parseObject(request("GET", "/api/parameters/" + p.get("id").getAsInt(), null));
+                    } catch (Exception e) {
+                        Logger.debug("PartDB: could not fetch parameter detail: {}", e.getMessage());
+                    }
+                }
+                if (full.has("value_typical") && !full.get("value_typical").isJsonNull()) {
+                    double v = full.get("value_typical").getAsDouble();
+                    return v > 0 ? v : null;
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** Resolves a parameter value by looking in partParams first, then fpParams as fallback. */
+    private Double resolveParamValue(String name, JsonArray partParams, JsonArray fpParams) {
+        Double v = fetchParamValue(partParams, name);
+        return v != null ? v : fetchParamValue(fpParams, name);
     }
 
     private void pushHeightParameter(int partDbId, double heightMm) throws Exception {
