@@ -125,7 +125,7 @@ public class PartsPanel extends JPanel implements WizardContainer {
         singleSelectionActionGroup = new ActionGroup(deletePartAction, pickPartAction, copyPartToClipboardAction,
                 updateFromPartDbAction, pushToPartDbAction);
         singleSelectionActionGroup.setEnabled(false);
-        multiSelectionActionGroup = new ActionGroup(deletePartAction);
+        multiSelectionActionGroup = new ActionGroup(deletePartAction, updateFromPartDbAction, pushToPartDbAction);
         multiSelectionActionGroup.setEnabled(false);
 
         setLayout(new BorderLayout(0, 0));
@@ -525,12 +525,14 @@ public class PartsPanel extends JPanel implements WizardContainer {
                         "No part database connected. Configure it in Machine Setup.");
                 return;
             }
-            Part part = getSelectedPart();
-            if (part == null) {
+            List<Part> parts = getSelections();
+            if (parts.isEmpty()) {
                 return;
             }
             UiUtils.messageBoxOnException(() -> {
-                db.updatePart(part);
+                for (Part part : parts) {
+                    db.updatePart(part);
+                }
                 tableModel.fireTableDataChanged();
             });
         }
@@ -551,11 +553,15 @@ public class PartsPanel extends JPanel implements WizardContainer {
                         "No part database connected. Configure it in Machine Setup.");
                 return;
             }
-            Part part = getSelectedPart();
-            if (part == null) {
+            List<Part> parts = getSelections();
+            if (parts.isEmpty()) {
                 return;
             }
-            UiUtils.messageBoxOnException(() -> db.pushPart(part));
+            UiUtils.messageBoxOnException(() -> {
+                for (Part part : parts) {
+                    db.pushPart(part);
+                }
+            });
         }
     };
 
