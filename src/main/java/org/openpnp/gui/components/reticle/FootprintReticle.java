@@ -74,6 +74,15 @@ public class FootprintReticle implements Reticle {
         shape = tx.createTransformedShape(shape);
         g2d.draw(shape);
 
+        // Overdraw pin 1 in amber — matched by name "1" or "A1" (case-insensitive).
+        footprint.getPads().stream()
+                .filter(p -> "1".equals(p.getName()) || "A1".equalsIgnoreCase(p.getName()))
+                .findFirst()
+                .ifPresent(pin1 -> {
+                    g2d.setColor(new Color(255, 140, 0));
+                    g2d.draw(tx.createTransformedShape(pin1.getShape()));
+                });
+
         // Draw body outline in green.
         Shape bodyShape = footprint.getBodyShape();
         if (bodyShape != null) {
