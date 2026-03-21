@@ -24,6 +24,7 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
     private final PartDbDatabase db;
     private JTextField urlField;
     private JPasswordField tokenField;
+    private JTextField kicadLibraryPathField;
 
     public PartDbDatabaseWizard(PartDbDatabase db) {
         this.db = db;
@@ -47,6 +48,8 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
                         FormSpecs.DEFAULT_ROWSPEC,
                         FormSpecs.RELATED_GAP_ROWSPEC,
                         FormSpecs.DEFAULT_ROWSPEC,
+                        FormSpecs.RELATED_GAP_ROWSPEC,
+                        FormSpecs.DEFAULT_ROWSPEC,
                 }));
 
         panel.add(new JLabel("URL"), "2, 2, right, default");
@@ -56,6 +59,10 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
         panel.add(new JLabel("API Token"), "2, 4, right, default");
         tokenField = new JPasswordField();
         panel.add(tokenField, "4, 4");
+
+        panel.add(new JLabel("KiCad Library Path"), "2, 6, right, default");
+        kicadLibraryPathField = new JTextField();
+        panel.add(kicadLibraryPathField, "4, 6");
 
         JButton testBtn = new JButton("Test Connection");
         testBtn.addActionListener(e -> UiUtils.messageBoxOnException(() -> {
@@ -73,12 +80,13 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
                         "PartDB Connection", JOptionPane.ERROR_MESSAGE);
             }
         }));
-        panel.add(testBtn, "4, 6");
+        panel.add(testBtn, "4, 8");
     }
 
     @Override
     public void createBindings() {
         addWrappedBinding(db, "url", urlField, "text");
         addWrappedBinding(db, "apiToken", tokenField, "text");
+        addWrappedBinding(db, "kicadLibraryPath", kicadLibraryPathField, "text");
     }
 }
