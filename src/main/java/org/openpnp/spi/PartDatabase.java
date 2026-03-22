@@ -1,6 +1,7 @@
 package org.openpnp.spi;
 
 import java.util.List;
+import java.util.Map;
 
 import org.openpnp.model.Part;
 
@@ -50,5 +51,34 @@ public interface PartDatabase extends WizardConfigurable, PropertySheetHolder {
      */
     default List<String> searchParts(String query) throws Exception {
         throw new UnsupportedOperationException("searchParts not supported by this database");
+    }
+
+    /**
+     * Record a single completed placement in the pending buffer (fast, no I/O).
+     * Default is a no-op; implementations may override to track stock in real time.
+     */
+    default void trackPlacement(String partId) throws Exception {
+    }
+
+    /**
+     * Called once when a job finishes. Implementations may auto-flush pending counts.
+     * Default is a no-op.
+     */
+    default void onJobFinished() throws Exception {
+    }
+
+    /**
+     * Called at job end with a map of {partId → completedPlacementCount}.
+     * Accumulates counts into a pending buffer; call flushPlacements() to apply.
+     * Default is a no-op; implementations may override to track stock.
+     */
+    default void recordPlacements(Map<String, Integer> partNameToCount) throws Exception {
+    }
+
+    /**
+     * Send all accumulated pending placement counts to the external database.
+     * Default is a no-op; implementations may override.
+     */
+    default void flushPlacements() throws Exception {
     }
 }

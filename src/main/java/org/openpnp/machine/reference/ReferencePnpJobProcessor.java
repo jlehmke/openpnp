@@ -61,6 +61,7 @@ import org.openpnp.spi.Machine;
 import org.openpnp.spi.Nozzle;
 import org.openpnp.spi.NozzleTip;
 import org.openpnp.spi.PartAlignment;
+import org.openpnp.spi.PartDatabase;
 import org.openpnp.spi.PnpJobPlanner;
 import org.openpnp.spi.PnpJobPlanner.PlannedPlacement;
 import org.openpnp.spi.PnpJobProcessor.JobPlacement.Status;
@@ -1775,7 +1776,21 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
 
             // Mark the placement as finished
             jobPlacement.setStatus(Status.Complete);
-            
+
+            // Track consumed part for stock adjustment
+            try {
+                PartDatabase trackDb = null;
+                if (Configuration.get().getMachine() instanceof ReferenceMachine) {
+                    trackDb = ((ReferenceMachine) Configuration.get().getMachine()).getPartDatabase();
+                }
+                if (trackDb != null) {
+                    trackDb.trackPlacement(part.getId());
+                }
+            }
+            catch (Exception e) {
+                Logger.warn("PartDB: could not track placement for '{}': {}", part.getId(), e.getMessage());
+            }
+
             // Mark the placement as "placed"
 //            boardLocation.setPlaced(jobPlacement.getPlacement().getId(), true);
             job.storePlacedStatus(boardLocation, jobPlacement.getPlacement().getId(), true);
@@ -1979,6 +1994,20 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
 
             Logger.info("Job finished {} parts in {} sec. This is {} CPH", totalPartsPlaced,
                     df.format(dtSec), df.format(totalPartsPlaced / (dtSec / 3600.0)));
+
+            // Flush pending stock counts to the part database (if auto-flush is enabled).
+            PartDatabase partDb = null;
+            if (Configuration.get().getMachine() instanceof ReferenceMachine) {
+                partDb = ((ReferenceMachine) Configuration.get().getMachine()).getPartDatabase();
+            }
+            if (partDb != null) {
+                try {
+                    partDb.onJobFinished();
+                }
+                catch (Exception e) {
+                    Logger.warn("PartDB: job-end stock flush failed: {}", e.getMessage());
+                }
+            }
 
             try {
                 HashMap<String, Object> params = new HashMap<>();

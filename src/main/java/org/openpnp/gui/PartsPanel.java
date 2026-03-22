@@ -39,6 +39,8 @@ import java.util.prefs.Preferences;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
 
+import java.awt.Color;
+
 import javax.swing.AbstractAction;
 import javax.swing.Action;
 import javax.swing.DefaultCellEditor;
@@ -54,15 +56,20 @@ import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.RowFilter;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
+import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 
 import org.openpnp.Translations;
 import org.openpnp.gui.components.AutoSelectTextTable;
+import org.openpnp.machine.reference.PartDbDatabase;
 import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.gui.support.AbstractConfigurationWizard;
 import org.openpnp.gui.support.ActionGroup;
@@ -117,6 +124,8 @@ public class PartsPanel extends JPanel implements WizardContainer {
     private Part selectedPart;
     private int priorRowIndex = -1;
     private HashMap<Class, Integer> lastSelectedTabIndex = new HashMap<>();
+    private TableColumn stockColumn;
+    private JButton flushStockBtn;
 
     public PartsPanel(Configuration configuration, Frame frame) {
         this.configuration = configuration;
@@ -184,6 +193,14 @@ public class PartsPanel extends JPanel implements WizardContainer {
         add(splitPane, BorderLayout.CENTER);
 
         tabbedPane = new JTabbedPane(JTabbedPane.TOP);
+        tabbedPane.addChangeListener(e -> {
+            if (!rebuildingTabs) {
+                Component selected = tabbedPane.getSelectedComponent();
+                if (selected instanceof PartDbDetailsPanel) {
+                    ((PartDbDetailsPanel) selected).loadIfNeeded();
+                }
+            }
+        });
 
         table = new AutoSelectTextTable(tableModel) {
             @Override
@@ -194,6 +211,13 @@ public class PartsPanel extends JPanel implements WizardContainer {
                 return null;
             }
         };
+        // Cancel any active cell edit before the model fires structural changes,
+        // otherwise DefaultRowSorter throws IndexOutOfBoundsException.
+        tableModel.addTableModelListener(e -> {
+            if (table.isEditing()) {
+                table.removeEditor();
+            }
+        });
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.setDefaultEditor(org.openpnp.model.Package.class,
                 new DefaultCellEditor(packagesCombo));
@@ -240,6 +264,17 @@ public class PartsPanel extends JPanel implements WizardContainer {
         toolBar.add(importFromPartDbAction);
         toolBar.add(updateFromPartDbAction);
         toolBar.add(pushToPartDbAction);
+        flushStockBtn = new JButton(Icons.partDbSync);
+        flushStockBtn.setToolTipText("Sync stock: push pending placements and refresh from database");
+        flushStockBtn.setVisible(false);
+        flushStockBtn.setEnabled(false);
+        flushStockBtn.addActionListener(e -> UiUtils.messageBoxOnException(() -> {
+            if (partDb != null) {
+                partDb.flushPlacements();
+                partDb.refreshStockLevels();
+            }
+        }));
+        toolBar.add(flushStockBtn);
 
         table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
             @Override
@@ -264,11 +299,113 @@ public class PartsPanel extends JPanel implements WizardContainer {
         });
 
         tableModel.addTableModelListener(e -> {
-            if (selectedPart != null && getSelectedPart() != selectedPart) { 
+            if (selectedPart != null && getSelectedPart() != selectedPart) {
                 // Reselect previously selected settings.
                 Helpers.selectObjectTableRow(table, selectedPart);
             }
         });
+
+        // Save stock column object and hide it immediately; set up PartDB listeners once
+        // the machine is available (deferred so configuration is fully loaded).
+        stockColumn = table.getColumnModel().getColumn(10);
+        table.removeColumn(stockColumn);
+        SwingUtilities.invokeLater(this::setupPartDbStockColumn);
+    }
+
+    private boolean stockColumnShown = false;
+
+    private PartDbDatabase partDb;
+
+    private void setupPartDbStockColumn() {
+        Machine machine = configuration.getMachine();
+        if (!(machine instanceof ReferenceMachine)) {
+            return;
+        }
+        PartDatabase db = ((ReferenceMachine) machine).getPartDatabase();
+        if (!(db instanceof PartDbDatabase)) {
+            return;
+        }
+        partDb = (PartDbDatabase) db;
+
+        // Yellow background on stock cell when that part has pending (unflushed) placements.
+        stockColumn.setCellRenderer(new DefaultTableCellRenderer() {
+            private final Color pendingColor = new Color(255, 230, 80);
+            @Override
+            public Component getTableCellRendererComponent(JTable tbl, Object value,
+                    boolean selected, boolean focus, int viewRow, int col) {
+                super.getTableCellRendererComponent(tbl, value, selected, focus, viewRow, col);
+                setHorizontalAlignment(SwingConstants.RIGHT);
+                if (!selected) {
+                    if (partDb != null) {
+                        int modelRow = tbl.convertRowIndexToModel(viewRow);
+                        Part rowPart = tableModel.getRowObjectAt(modelRow);
+                        if (rowPart != null && partDb.getPendingCount(rowPart.getId()) > 0) {
+                            setBackground(pendingColor);
+                            return this;
+                        }
+                    }
+                    setBackground(tbl.getBackground());
+                }
+                return this;
+            }
+        });
+
+        updateStockColumnVisibility();
+        updateFlushButton();
+
+        partDb.addPropertyChangeListener("connected", evt ->
+                SwingUtilities.invokeLater(() -> {
+                    updateStockColumnVisibility();
+                    updateFlushButton();
+                }));
+        partDb.addPropertyChangeListener("enabled", evt ->
+                SwingUtilities.invokeLater(() -> {
+                    updateStockColumnVisibility();
+                    updateFlushButton();
+                }));
+        partDb.addPropertyChangeListener("trackPlacements", evt ->
+                SwingUtilities.invokeLater(this::updateStockColumnVisibility));
+        partDb.addPropertyChangeListener("hideStockLevel", evt ->
+                SwingUtilities.invokeLater(this::updateStockColumnVisibility));
+        partDb.addPropertyChangeListener("readOnly", evt ->
+                SwingUtilities.invokeLater(this::updateFlushButton));
+        partDb.addPropertyChangeListener("disableAutoFlushOnJobFinish", evt ->
+                SwingUtilities.invokeLater(this::updateFlushButton));
+        partDb.addPropertyChangeListener("disableAutoFlushOnShutdown", evt ->
+                SwingUtilities.invokeLater(this::updateFlushButton));
+        partDb.addPropertyChangeListener("stockLevels", evt ->
+                SwingUtilities.invokeLater(tableModel::fireTableDataChanged));
+        partDb.addPropertyChangeListener("pendingPlacements", evt ->
+                SwingUtilities.invokeLater(tableModel::fireTableDataChanged));
+    }
+
+    private void updateStockColumnVisibility() {
+        if (partDb != null && partDb.isEnabled() && partDb.isConnected()
+                && partDb.isTrackPlacements() && !partDb.isHideStockLevel()) {
+            showStockColumn();
+        } else {
+            hideStockColumn();
+        }
+    }
+
+    private void updateFlushButton() {
+        boolean visible = partDb != null && partDb.isEnabled();
+        flushStockBtn.setVisible(visible);
+        flushStockBtn.setEnabled(visible && partDb.isConnected() && !partDb.isReadOnly());
+    }
+
+    private void showStockColumn() {
+        if (!stockColumnShown) {
+            table.addColumn(stockColumn);
+            stockColumnShown = true;
+        }
+    }
+
+    private void hideStockColumn() {
+        if (stockColumnShown) {
+            table.removeColumn(stockColumn);
+            stockColumnShown = false;
+        }
     }
 
     public Part getSelectedPart() {
@@ -568,6 +705,7 @@ public class PartsPanel extends JPanel implements WizardContainer {
 
     private int selectedTab;
     private String priorPartId;
+    private boolean rebuildingTabs = false;
 
     public void updateWizards() {
         List<Part> selections = getSelections();
@@ -586,7 +724,8 @@ public class PartsPanel extends JPanel implements WizardContainer {
         if (tabbedPane.getTabCount() > 0) {
             selectedTab = tabbedPane.getSelectedIndex();
         }
-        
+        rebuildingTabs = true;
+
         for (Component comp : tabbedPane.getComponents()) {
             if (comp instanceof AbstractConfigurationWizard) {
                 ((AbstractConfigurationWizard) comp).dispose();
@@ -617,8 +756,12 @@ public class PartsPanel extends JPanel implements WizardContainer {
                 wizard.setWizardContainer(PartsPanel.this);
                 tabbedPane.add(wizard.getWizardName(), (JPanel) wizard);
             }
+            if (partDb != null && partDb.isEnabled()) {
+                tabbedPane.add("Part Database", new PartDbDetailsPanel(selectedPart, partDb));
+            }
+
             MainFrame mainFrame = MainFrame.get();
-            if (mainFrame.getTabs().getSelectedComponent() == mainFrame.getPartsTab() 
+            if (mainFrame.getTabs().getSelectedComponent() == mainFrame.getPartsTab()
                     && Configuration.get().getTablesLinked() == TablesLinked.Linked) {
                 mainFrame.getPackagesTab().selectPackageInTable(selectedPart.getPackage());
                 mainFrame.getFeedersTab().selectFeederForPart(selectedPart);
@@ -629,6 +772,15 @@ public class PartsPanel extends JPanel implements WizardContainer {
                 tabbedPane.setSelectedIndex(selectedTab);
             }
         }
+        rebuildingTabs = false;
+
+        // If the Part Database tab is already selected after rebuild, trigger load now.
+        Component selected = tabbedPane.getSelectedComponent();
+        if (selected instanceof PartDbDetailsPanel) {
+            ((PartDbDetailsPanel) selected).loadIfNeeded();
+        }
+
+
         revalidate();
         repaint();
     }

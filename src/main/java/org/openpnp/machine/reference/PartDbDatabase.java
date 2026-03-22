@@ -4,7 +4,10 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -31,6 +34,8 @@ import org.openpnp.model.Part;
 import org.openpnp.spi.base.AbstractPartDatabase;
 import org.pmw.tinylog.Logger;
 import org.simpleframework.xml.Attribute;
+import org.simpleframework.xml.Element;
+import org.simpleframework.xml.ElementMap;
 import org.simpleframework.xml.Root;
 import org.simpleframework.xml.core.Commit;
 
@@ -49,6 +54,95 @@ public class PartDbDatabase extends AbstractPartDatabase {
             .build();
 
     @Attribute(required = false)
+    private boolean enabled = false;
+
+    public boolean isEnabled() { return enabled; }
+    public void setEnabled(boolean v) {
+        boolean old = this.enabled;
+        this.enabled = v;
+        firePropertyChange("enabled", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean trackPlacements = false;
+
+    public boolean isTrackPlacements() { return trackPlacements; }
+    public void setTrackPlacements(boolean v) {
+        boolean old = this.trackPlacements;
+        this.trackPlacements = v;
+        firePropertyChange("trackPlacements", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean disableAutoFlushOnShutdown = false;
+
+    public boolean isDisableAutoFlushOnShutdown() { return disableAutoFlushOnShutdown; }
+    public void setDisableAutoFlushOnShutdown(boolean v) {
+        boolean old = this.disableAutoFlushOnShutdown;
+        this.disableAutoFlushOnShutdown = v;
+        firePropertyChange("disableAutoFlushOnShutdown", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean readOnly = false;
+
+    public boolean isReadOnly() { return readOnly; }
+    public void setReadOnly(boolean v) {
+        boolean old = this.readOnly;
+        this.readOnly = v;
+        firePropertyChange("readOnly", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean autoApplyKicadPads = false;
+
+    public boolean isAutoApplyKicadPads() { return autoApplyKicadPads; }
+    public void setAutoApplyKicadPads(boolean v) {
+        boolean old = this.autoApplyKicadPads;
+        this.autoApplyKicadPads = v;
+        firePropertyChange("autoApplyKicadPads", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean disableFootprintOnImport = false;
+
+    public boolean isDisableFootprintOnImport() { return disableFootprintOnImport; }
+    public void setDisableFootprintOnImport(boolean v) {
+        boolean old = this.disableFootprintOnImport;
+        this.disableFootprintOnImport = v;
+        firePropertyChange("disableFootprintOnImport", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean disableFootprintOnUpdate = false;
+
+    public boolean isDisableFootprintOnUpdate() { return disableFootprintOnUpdate; }
+    public void setDisableFootprintOnUpdate(boolean v) {
+        boolean old = this.disableFootprintOnUpdate;
+        this.disableFootprintOnUpdate = v;
+        firePropertyChange("disableFootprintOnUpdate", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean hideStockLevel = false;
+
+    public boolean isHideStockLevel() { return hideStockLevel; }
+    public void setHideStockLevel(boolean v) {
+        boolean old = this.hideStockLevel;
+        this.hideStockLevel = v;
+        firePropertyChange("hideStockLevel", old, v);
+    }
+
+    /** Legacy absorber — old showStockLevel attribute; no longer used. */
+    @Attribute(name = "showStockLevel", required = false)
+    private boolean showStockLevelLegacy = false;
+
+    /** Absorbs the old XML attribute so strict-mode deserialisation does not fail on existing configs. */
+    @Attribute(name = "kicadLibraryPath", required = false)
+    private String kicadLibraryPathAttr = null;
+
+    /** Library paths, one per line.  Stored as XML element so newlines survive the round-trip. */
+    @Element(required = false)
     private String kicadLibraryPath = "";
 
     public String getKicadLibraryPath() {
@@ -61,15 +155,104 @@ public class PartDbDatabase extends AbstractPartDatabase {
         firePropertyChange("kicadLibraryPath", old, path);
     }
 
+    /** Legacy absorber for old adjustStockOnJobFinish attribute. */
+    @Attribute(name = "adjustStockOnJobFinish", required = false)
+    private boolean adjustStockOnJobFinishLegacy = false;
+
+    @Attribute(required = false)
+    private boolean disableAutoFlushOnJobFinish = false;
+
+    public boolean isDisableAutoFlushOnJobFinish() { return disableAutoFlushOnJobFinish; }
+    public void setDisableAutoFlushOnJobFinish(boolean v) {
+        boolean old = this.disableAutoFlushOnJobFinish;
+        this.disableAutoFlushOnJobFinish = v;
+        firePropertyChange("disableAutoFlushOnJobFinish", old, v);
+    }
+
+    @Attribute(required = false)
+    private boolean allowExternalAttachments = false;
+
+    /** Maps OpenPnP part ID → selected PartDB lot ID for stock adjustment. */
+    @ElementMap(required = false, entry = "lot", key = "partId", value = "lotId", attribute = true)
+    private Map<String, Integer> selectedLots = new HashMap<>();
+
+    public int getSelectedLotId(String partId) {
+        return selectedLots.getOrDefault(partId, -1);
+    }
+
+    public void setSelectedLotId(String partId, int lotId) {
+        selectedLots.put(partId, lotId);
+    }
+
+    public void clearSelectedLotId(String partId) {
+        selectedLots.remove(partId);
+    }
+
+    public boolean isAllowExternalAttachments() {
+        return allowExternalAttachments;
+    }
+
+    public void setAllowExternalAttachments(boolean v) {
+        boolean old = this.allowExternalAttachments;
+        this.allowExternalAttachments = v;
+        firePropertyChange("allowExternalAttachments", old, v);
+    }
+
+    /** Cached stock levels: partId → total amount across all lots. Absent = not fetched. */
+    private final transient Map<String, Integer> stockCache = new HashMap<>();
+
+    /** Pending placement counts not yet flushed to PartDB: partId → count. */
+    private final transient Map<String, Integer> pendingPlacements = new ConcurrentHashMap<>();
+
+    /** Returns the cached stock level for a part, or null if not yet fetched. */
+    public Integer getStockLevel(String partId) {
+        return stockCache.get(partId);
+    }
+
+    /** Returns the number of pending (not yet flushed) placements for a part. */
+    public int getPendingCount(String partId) {
+        return pendingPlacements.getOrDefault(partId, 0);
+    }
+
+    /** Returns true if there are any pending placements waiting to be flushed. */
+    public boolean hasPendingPlacements() {
+        return !pendingPlacements.isEmpty();
+    }
+
+    /** Fetches stock levels for all known OpenPnP parts from PartDB and fires "stockLevels". */
+    public void refreshStockLevels() {
+        if (!connected) {
+            return;
+        }
+        for (Part part : Configuration.get().getParts()) {
+            try {
+                JsonObject partData = findPartByName(part.getId());
+                int stock = partData.get("total_instock").getAsBigDecimal().intValue();
+                stockCache.put(part.getId(), stock);
+            } catch (Exception e) {
+                // Part not in PartDB or network error — skip silently.
+            }
+        }
+        firePropertyChange("stockLevels", null, stockCache);
+    }
+
     @SuppressWarnings("deprecation")
     private static final JsonParser JSON_PARSER = new JsonParser();
 
     @Commit
     private void onLoad() {
-        if (url != null && !url.isEmpty() && apiToken != null && !apiToken.isEmpty()) {
+        // Migrate from old @Attribute storage (newlines were lost to XML normalisation).
+        if ((kicadLibraryPath == null || kicadLibraryPath.isEmpty())
+                && kicadLibraryPathAttr != null && !kicadLibraryPathAttr.isEmpty()) {
+            kicadLibraryPath = kicadLibraryPathAttr.trim();
+        }
+        kicadLibraryPathAttr = null;
+
+        if (enabled && url != null && !url.isEmpty() && apiToken != null && !apiToken.isEmpty()) {
             Thread t = new Thread(() -> {
                 try {
                     connect();
+                    refreshStockLevels();
                 } catch (Exception e) {
                     Logger.warn("PartDB auto-connect failed: {}", e.getMessage());
                 }
@@ -78,6 +261,17 @@ public class PartDbDatabase extends AbstractPartDatabase {
             t.setName("PartDB-connect");
             t.start();
         }
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (enabled && !disableAutoFlushOnShutdown && hasPendingPlacements()) {
+                Logger.info("PartDB: flushing {} pending placement record(s) on shutdown",
+                        pendingPlacements.size());
+                try {
+                    flushPlacements();
+                } catch (Exception e) {
+                    Logger.warn("PartDB: shutdown flush failed: {}", e.getMessage());
+                }
+            }
+        }, "PartDB-shutdown-flush"));
     }
 
     @Override
@@ -121,12 +315,96 @@ public class PartDbDatabase extends AbstractPartDatabase {
     }
 
     @Override
+    public void trackPlacement(String partId) throws Exception {
+        if (!connected || !trackPlacements) {
+            return;
+        }
+        pendingPlacements.merge(partId, 1, Integer::sum);
+        firePropertyChange("pendingPlacements", null, pendingPlacements);
+    }
+
+    @Override
+    public void onJobFinished() throws Exception {
+        if (!disableAutoFlushOnJobFinish) {
+            flushPlacements();
+        }
+    }
+
+    @Override
+    public void flushPlacements() throws Exception {
+        if (!connected || pendingPlacements.isEmpty()) {
+            return;
+        }
+        if (readOnly) {
+            Logger.info("PartDB: read-only mode — flush skipped");
+            return;
+        }
+        Map<String, Integer> toFlush = new HashMap<>(pendingPlacements);
+        pendingPlacements.clear();
+        for (Map.Entry<String, Integer> entry : toFlush.entrySet()) {
+            try {
+                adjustStock(entry.getKey(), entry.getValue());
+            } catch (Exception e) {
+                Logger.warn("PartDB: could not flush stock for '{}': {}", entry.getKey(), e.getMessage());
+            }
+        }
+        // Refresh cache first so the table shows the new value and loses yellow simultaneously.
+        refreshStockLevels();
+        firePropertyChange("pendingPlacements", null, pendingPlacements);
+        Logger.info("PartDB: flushed stock for {} part(s)", toFlush.size());
+    }
+
+    /** Adjusts the amount of a specific lot by delta (positive = add, negative = remove).
+     *  Returns the new amount after clamping to 0. */
+    public int adjustLotAmount(int lotId, int delta) throws Exception {
+        if (readOnly) {
+            throw new Exception("Read-only mode — stock writes are disabled");
+        }
+        JsonObject lot = parseObject(request("GET", "/api/part_lots/" + lotId, null));
+        int current = lot.get("amount").getAsBigDecimal().intValue();
+        int updated = Math.max(0, current + delta);
+        JsonObject patch = new JsonObject();
+        patch.addProperty("amount", updated);
+        request("PATCH", "/api/part_lots/" + lotId, patch.toString());
+        refreshStockLevels();
+        return updated;
+    }
+
+    private void adjustStock(String partName, int count) throws Exception {
+        int lotId = selectedLots.getOrDefault(partName, -1);
+        int current;
+        if (lotId >= 0) {
+            // Use the user-selected lot directly
+            JsonObject lot = parseObject(request("GET", "/api/part_lots/" + lotId, null));
+            current = lot.get("amount").getAsBigDecimal().intValue();
+        } else {
+            // Fall back to first available lot
+            JsonObject partData = findPartByName(partName);
+            int partDbId = partData.get("id").getAsInt();
+            JsonArray lots = parseArray(request("GET",
+                    "/api/part_lots/?part=/api/parts/" + partDbId, null));
+            if (lots.size() == 0) {
+                Logger.warn("PartDB: no lots for '{}', skipping stock adjustment", partName);
+                return;
+            }
+            JsonObject lot = lots.get(0).getAsJsonObject();
+            lotId = lot.get("id").getAsInt();
+            current = lot.get("amount").getAsBigDecimal().intValue();
+        }
+        int updated = Math.max(0, current - count);
+        JsonObject patch = new JsonObject();
+        patch.addProperty("amount", updated);
+        request("PATCH", "/api/part_lots/" + lotId, patch.toString());
+        Logger.info("PartDB: stock '{}' {} → {} (placed {})", partName, current, updated, count);
+    }
+
+    @Override
     public Part importPart(String name) throws Exception {
         JsonObject partData = findPartByName(name);
         // Use the exact name from PartDB (preserves original casing) as the OpenPnP Part ID.
         String exactName = partData.get("name").getAsString();
         Part part = new Part(exactName);
-        applyPartData(part, partData);
+        applyPartData(part, partData, false);
         // addPart fires property changes that Swing listens to — must run on the EDT.
         if (SwingUtilities.isEventDispatchThread()) {
             Configuration.get().addPart(part);
@@ -140,7 +418,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
     @Override
     public void updatePart(Part part) throws Exception {
         JsonObject partData = findPartByName(part.getId());
-        applyPartData(part, partData);
+        applyPartData(part, partData, true);
         Logger.info("PartDB: updated part '{}'", part.getId());
     }
 
@@ -164,21 +442,36 @@ public class PartDbDatabase extends AbstractPartDatabase {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    private void importKicadPads(Package pkg, String kicadFootprint) {
+    /** Returns true if pads were successfully imported, false otherwise. */
+    public boolean importKicadPads(Package pkg, String kicadFootprint) {
         if (kicadLibraryPath == null || kicadLibraryPath.isEmpty() || kicadFootprint == null) {
-            return;
+            return false;
         }
         if (!kicadFootprint.contains(":")) {
             Logger.debug("PartDB: kicad_footprint '{}' has no library prefix, skipping pad import", kicadFootprint);
-            return;
+            return false;
         }
         String[] parts = kicadFootprint.split(":", 2);
-        for (String base : kicadLibraryPath.split("\\n")) {
+        String libName = parts[0];
+        String fpName  = parts[1];
+        for (String base : kicadLibraryPath.split("[\\r\\n]+")) {
             base = base.trim();
             if (base.isEmpty()) {
                 continue;
             }
-            File kicadFile = new File(base, parts[0] + ".pretty/" + parts[1] + ".kicad_mod");
+            File kicadFile;
+            if (base.endsWith(".pretty")) {
+                // Each line points directly at a .pretty library directory.
+                // Only search here if the directory name matches the library.
+                String dirLib = new File(base).getName().replace(".pretty", "");
+                if (!dirLib.equals(libName)) {
+                    continue;
+                }
+                kicadFile = new File(base, fpName + ".kicad_mod");
+            } else {
+                // Each line is the parent directory containing .pretty subdirectories.
+                kicadFile = new File(base, libName + ".pretty/" + fpName + ".kicad_mod");
+            }
             if (!kicadFile.exists()) {
                 continue;
             }
@@ -190,12 +483,14 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     fp.addPad(pad);
                 }
                 Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), kicadFile.getName());
+                return true;
             } catch (Exception e) {
                 Logger.warn("PartDB: could not import KiCad pads from '{}': {}", kicadFile, e.getMessage());
+                return false;
             }
-            return;
         }
         Logger.debug("PartDB: kicad_footprint '{}' not found in any library path", kicadFootprint);
+        return false;
     }
 
     private JsonObject findPartByName(String name) throws Exception {
@@ -207,7 +502,259 @@ public class PartDbDatabase extends AbstractPartDatabase {
         return results.get(0).getAsJsonObject();
     }
 
-    private void applyPartData(Part part, JsonObject data) throws Exception {
+    /** A single stock lot from PartDB. */
+    public static class PartDbLot {
+        public final int id;
+        public final String description;
+        public final String storageLocation;
+        public final int amount;
+
+        public PartDbLot(int id, String description, String storageLocation, int amount) {
+            this.id = id;
+            this.description = description;
+            this.storageLocation = storageLocation;
+            this.amount = amount;
+        }
+    }
+
+    /** Raw values fetched from PartDB for display in the Part Database details tab. */
+    public static class PartDbRawData {
+        // Header info
+        public final int partDbId;
+        public final String partName;
+        public final String ipn;
+        public final String mpn;
+        public final String packageName;
+        public final String description;
+        public final String thumbnailUrl;   // relative path or absolute URL, null if none
+        public final String datasheetUrl;   // absolute URL or relative path, null if none
+        // Parameter columns
+        public final String kicadFromPart;
+        public final String kicadFromFp;
+        public final Double partHeight;
+        public final Double fpHeight;
+        public final Double partBodyWidth;
+        public final Double fpBodyWidth;
+        public final Double partBodyLength;
+        public final Double fpBodyLength;
+        public final List<PartDbLot> lots;
+
+        public PartDbRawData(int partDbId, String partName, String ipn, String mpn, String packageName,
+                String description, String thumbnailUrl, String datasheetUrl,
+                String kicadFromPart, String kicadFromFp,
+                Double partHeight, Double fpHeight,
+                Double partBodyWidth, Double fpBodyWidth,
+                Double partBodyLength, Double fpBodyLength,
+                List<PartDbLot> lots) {
+            this.partDbId = partDbId;
+            this.partName = partName;
+            this.ipn = ipn;
+            this.mpn = mpn;
+            this.packageName = packageName;
+            this.description = description;
+            this.thumbnailUrl = thumbnailUrl;
+            this.datasheetUrl = datasheetUrl;
+            this.kicadFromPart = kicadFromPart;
+            this.kicadFromFp = kicadFromFp;
+            this.partHeight = partHeight;
+            this.fpHeight = fpHeight;
+            this.partBodyWidth = partBodyWidth;
+            this.fpBodyWidth = fpBodyWidth;
+            this.partBodyLength = partBodyLength;
+            this.fpBodyLength = fpBodyLength;
+            this.lots = lots != null ? lots : new ArrayList<>();
+        }
+    }
+
+    /** Fetches all managed values from PartDB for the given part name, keeping part-level and
+     *  footprint-level values separate so callers can detect conflicts. */
+    public PartDbRawData fetchRawData(String partName) throws Exception {
+        JsonObject summary = findPartByName(partName);
+        int partId = summary.get("id").getAsInt();
+        JsonObject detail = parseObject(request("GET", "/api/parts/" + partId, null));
+
+        String dbPartName = detail.has("name") ? detail.get("name").getAsString() : null;
+
+        String ipn = null;
+        if (detail.has("ipn") && !detail.get("ipn").isJsonNull()) {
+            ipn = detail.get("ipn").getAsString();
+            if (ipn.isEmpty()) {
+                ipn = null;
+            }
+        }
+
+        String mpn = null;
+        if (detail.has("manufacturer_product_number") && !detail.get("manufacturer_product_number").isJsonNull()) {
+            mpn = detail.get("manufacturer_product_number").getAsString();
+            if (mpn.isEmpty()) {
+                mpn = dbPartName;  // API: use name if MPN is empty
+            }
+        }
+
+        String description = null;
+        if (detail.has("description") && !detail.get("description").isJsonNull()) {
+            String d = detail.get("description").getAsString();
+            if (!d.isEmpty()) {
+                description = d;
+            }
+        }
+
+        // Use internal_path for the picture (avoids the //host/cache/… protocol-relative thumbnail_url).
+        // Fall back to external_path only when allowExternalAttachments is enabled.
+        String thumbnailUrl = null;
+        if (detail.has("master_picture_attachment") && !detail.get("master_picture_attachment").isJsonNull()) {
+            thumbnailUrl = pickAttachmentUrl(detail.getAsJsonObject("master_picture_attachment"));
+        }
+
+        String datasheetUrl = null;
+        if (detail.has("attachments") && detail.get("attachments").isJsonArray()) {
+            for (JsonElement el : detail.getAsJsonArray("attachments")) {
+                JsonObject att = el.getAsJsonObject();
+                String attName = att.has("name") ? att.get("name").getAsString().toLowerCase() : "";
+                String intPath = att.has("internal_path") ? att.get("internal_path").getAsString() : "";
+                String extPath = (att.has("external_path") && !att.get("external_path").isJsonNull())
+                        ? att.get("external_path").getAsString() : "";
+                boolean isPdf = intPath.toLowerCase().endsWith(".pdf")
+                        || extPath.toLowerCase().endsWith(".pdf");
+                boolean isNamedDatasheet = attName.contains("datasheet");
+                if (isPdf || isNamedDatasheet) {
+                    datasheetUrl = pickAttachmentUrl(att);
+                    if (datasheetUrl != null) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        String packageName = null;
+        int footprintId = -1;
+        if (detail.has("footprint") && !detail.get("footprint").isJsonNull()) {
+            JsonObject fp = detail.getAsJsonObject("footprint");
+            if (fp.has("name")) {
+                packageName = fp.get("name").getAsString();
+            }
+            if (fp.has("id")) {
+                footprintId = fp.get("id").getAsInt();
+            }
+        }
+
+        String kicadFromPart = extractKicadFootprint(detail);
+        JsonArray partParams = detail.has("parameters") ? detail.getAsJsonArray("parameters") : null;
+        Double partHeight = fetchParamValue(partParams, "height");
+        Double partBodyWidth = fetchParamValue(partParams, "width");
+        Double partBodyLength = fetchParamValue(partParams, "length");
+
+        String kicadFromFp = null;
+        Double fpHeight = null;
+        Double fpBodyWidth = null;
+        Double fpBodyLength = null;
+        if (footprintId >= 0) {
+            try {
+                JsonObject fpDetail = parseObject(request("GET", "/api/footprints/" + footprintId, null));
+                JsonArray fpParams = fpDetail.has("parameters") ? fpDetail.getAsJsonArray("parameters") : null;
+                kicadFromFp = extractKicadFootprint(fpDetail);
+                fpHeight = fetchParamValue(fpParams, "height");
+                fpBodyWidth = fetchParamValue(fpParams, "width");
+                fpBodyLength = fetchParamValue(fpParams, "length");
+            } catch (Exception e) {
+                Logger.debug("PartDB: could not fetch footprint detail for raw data: {}", e.getMessage());
+            }
+        }
+
+        List<PartDbLot> lots = new ArrayList<>();
+        if (detail.has("partLots") && detail.get("partLots").isJsonArray()) {
+            for (JsonElement el : detail.getAsJsonArray("partLots")) {
+                JsonObject lot = el.getAsJsonObject();
+                int lotId = lot.get("id").getAsInt();
+                String lotDesc = lot.has("description") ? lot.get("description").getAsString() : "";
+                int amount = lot.has("amount") ? lot.get("amount").getAsBigDecimal().intValue() : 0;
+                String storagePath = "";
+                if (lot.has("storage_location") && !lot.get("storage_location").isJsonNull()
+                        && lot.get("storage_location").isJsonObject()) {
+                    JsonObject sl = lot.getAsJsonObject("storage_location");
+                    String fp = sl.has("full_path") ? sl.get("full_path").getAsString() : "";
+                    String nm = sl.has("name") ? sl.get("name").getAsString() : "";
+                    storagePath = !fp.isEmpty() ? fp : nm;
+                }
+                lots.add(new PartDbLot(lotId, lotDesc, storagePath, amount));
+            }
+        }
+
+        return new PartDbRawData(partId, dbPartName, ipn, mpn, packageName, description, thumbnailUrl, datasheetUrl,
+                kicadFromPart, kicadFromFp,
+                partHeight, fpHeight, partBodyWidth, fpBodyWidth, partBodyLength, fpBodyLength,
+                lots);
+    }
+
+    /** Fetches raw bytes from an image URL. Absolute URLs (http/https) are used as-is;
+     *  relative paths are resolved against the PartDB base URL with authentication.
+     *  If a LiipImagineBundle cache path returns 404 the resolve URL is tried to warm the cache. */
+    public byte[] requestBytes(String imageUrl) throws Exception {
+        boolean absolute = imageUrl.startsWith("http://") || imageUrl.startsWith("https://");
+        String fullUrl = absolute ? imageUrl : url.replaceAll("/+$", "") + imageUrl;
+        HttpResponse<byte[]> resp = doGetBytes(fullUrl, !absolute);
+        // LiipImagineBundle thumbnails are generated lazily; the resolve endpoint warms the cache.
+        if (resp.statusCode() == 404 && fullUrl.contains("/media/cache/")
+                && !fullUrl.contains("/media/cache/resolve/")) {
+            Logger.debug("PartDB: 404 for {}, retrying via resolve URL", fullUrl);
+            String resolveUrl = fullUrl.replace("/media/cache/", "/media/cache/resolve/");
+            resp = doGetBytes(resolveUrl, !absolute);
+        }
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new IOException("HTTP " + resp.statusCode() + " " + fullUrl);
+        }
+        return resp.body();
+    }
+
+    private HttpResponse<byte[]> doGetBytes(String fullUrl, boolean withAuth) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(fullUrl))
+                .header("Accept", "*/*")
+                .GET()
+                .timeout(Duration.ofSeconds(10));
+        if (withAuth) {
+            builder.header("Authorization", "Bearer " + apiToken);
+        }
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
+    }
+
+    /** Returns the best URL for an attachment object.
+     *  Prefers internal_path (relative, served by this PartDB instance).
+     *  Falls back to external_path only when allowExternalAttachments is enabled. */
+    private String pickAttachmentUrl(JsonObject att) {
+        if (att == null) {
+            return null;
+        }
+        String intPath = att.has("internal_path") ? att.get("internal_path").getAsString() : "";
+        if (!intPath.isEmpty()) {
+            return intPath;
+        }
+        if (allowExternalAttachments) {
+            String extPath = (att.has("external_path") && !att.get("external_path").isJsonNull())
+                    ? att.get("external_path").getAsString() : "";
+            if (!extPath.isEmpty()) {
+                return extPath;
+            }
+        }
+        return null;
+    }
+
+    private String extractKicadFootprint(JsonObject obj) {
+        if (!obj.has("eda_info") || obj.get("eda_info").isJsonNull()) {
+            return null;
+        }
+        JsonElement el = obj.get("eda_info");
+        JsonObject edaInfo = el.isJsonArray() && el.getAsJsonArray().size() > 0
+                ? el.getAsJsonArray().get(0).getAsJsonObject()
+                : el.isJsonObject() ? el.getAsJsonObject() : null;
+        if (edaInfo != null && edaInfo.has("kicad_footprint") && !edaInfo.get("kicad_footprint").isJsonNull()) {
+            String kfp = edaInfo.get("kicad_footprint").getAsString();
+            return kfp.isEmpty() ? null : kfp;
+        }
+        return null;
+    }
+
+    private void applyPartData(Part part, JsonObject data, boolean isUpdate) throws Exception {
         // --- Collect all values via network calls on the current (background) thread ---
 
         String newName = null;
@@ -243,18 +790,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     }
                 }
 
-                if (detail.has("eda_info") && !detail.get("eda_info").isJsonNull()) {
-                    JsonElement edaInfoEl = detail.get("eda_info");
-                    JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
-                            ? edaInfoEl.getAsJsonArray().get(0).getAsJsonObject()
-                            : edaInfoEl.isJsonObject() ? edaInfoEl.getAsJsonObject() : null;
-                    if (edaInfo != null && edaInfo.has("kicad_footprint") && !edaInfo.get("kicad_footprint").isJsonNull()) {
-                        String kfp = edaInfo.get("kicad_footprint").getAsString();
-                        if (!kfp.isEmpty()) {
-                            newKicadFootprint = kfp;
-                        }
-                    }
-                }
+                newKicadFootprint = extractKicadFootprint(detail);
 
                 JsonArray partParams = detail.has("parameters") ? detail.getAsJsonArray("parameters") : null;
 
@@ -265,17 +801,8 @@ public class PartDbDatabase extends AbstractPartDatabase {
                         String fpJson = request("GET", "/api/footprints/" + footprintId, null);
                         JsonObject fpDetail = parseObject(fpJson);
                         fpParams = fpDetail.has("parameters") ? fpDetail.getAsJsonArray("parameters") : null;
-                        if (newKicadFootprint == null && fpDetail.has("eda_info") && !fpDetail.get("eda_info").isJsonNull()) {
-                            JsonElement edaInfoEl = fpDetail.get("eda_info");
-                            JsonObject edaInfo = edaInfoEl.isJsonArray() && edaInfoEl.getAsJsonArray().size() > 0
-                                    ? edaInfoEl.getAsJsonArray().get(0).getAsJsonObject()
-                                    : edaInfoEl.isJsonObject() ? edaInfoEl.getAsJsonObject() : null;
-                            if (edaInfo != null && edaInfo.has("kicad_footprint") && !edaInfo.get("kicad_footprint").isJsonNull()) {
-                                String kfp = edaInfo.get("kicad_footprint").getAsString();
-                                if (!kfp.isEmpty()) {
-                                    newKicadFootprint = kfp;
-                                }
-                            }
+                        if (newKicadFootprint == null) {
+                            newKicadFootprint = extractKicadFootprint(fpDetail);
                         }
                     } catch (Exception e) {
                         Logger.debug("PartDB: could not fetch footprint detail: {}", e.getMessage());
@@ -301,11 +828,12 @@ public class PartDbDatabase extends AbstractPartDatabase {
         final Double fBodyWidth = newBodyWidth;
         final Double fBodyLength = newBodyLength;
         final String fKicadFootprint = newKicadFootprint;
+        final boolean skipFootprint = isUpdate ? disableFootprintOnUpdate : disableFootprintOnImport;
         Runnable applyChanges = () -> {
             if (fName != null) {
                 part.setName(fName);
             }
-            if (fPkgName != null) {
+            if (fPkgName != null && !skipFootprint) {
                 Package existing = Configuration.get().getPackage(fPkgName);
                 if (existing == null) {
                     existing = new Package(fPkgName);
@@ -313,7 +841,9 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     Logger.info("PartDB: created package '{}'", fPkgName);
                 }
                 part.setPackage(existing);
-                importKicadPads(existing, fKicadFootprint);
+                if (autoApplyKicadPads) {
+                    importKicadPads(existing, fKicadFootprint);
+                }
                 if (fBodyWidth != null) {
                     existing.getFootprint().setBodyWidth(fBodyWidth);
                 }

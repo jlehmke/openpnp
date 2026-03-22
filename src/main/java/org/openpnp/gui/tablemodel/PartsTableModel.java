@@ -27,12 +27,16 @@ import java.util.List;
 import org.openpnp.Translations;
 import org.openpnp.gui.support.LengthCellValue;
 import org.openpnp.gui.support.PercentConverter;
+import org.openpnp.machine.reference.PartDbDatabase;
+import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.model.BottomVisionSettings;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.FiducialVisionSettings;
 import org.openpnp.model.Length;
 import org.openpnp.model.Package;
 import org.openpnp.model.Part;
+import org.openpnp.spi.Machine;
+import org.openpnp.spi.PartDatabase;
 import org.openpnp.util.Collect;
 
 @SuppressWarnings("serial")
@@ -47,10 +51,11 @@ public class PartsTableModel extends AbstractObjectTableModel implements Propert
                     Translations.getString("PartsTableModel.ColumnName.BottomVision"), //$NON-NLS-1$
                     Translations.getString("PartsTableModel.ColumnName.FiducialVision"), //$NON-NLS-1$
                     Translations.getString("PartsTableModel.ColumnName.Placements"), //$NON-NLS-1$
-                    Translations.getString("PartsTableModel.ColumnName.Feeders") //$NON-NLS-1$
+                    Translations.getString("PartsTableModel.ColumnName.Feeders"), //$NON-NLS-1$
+                    Translations.getString("PartsTableModel.ColumnName.Stock") //$NON-NLS-1$
     };
     private Class[] columnTypes = new Class[] {String.class, String.class, LengthCellValue.class, LengthCellValue.class,
-            Package.class, String.class, BottomVisionSettings.class, FiducialVisionSettings.class, Integer.class, Integer.class};
+            Package.class, String.class, BottomVisionSettings.class, FiducialVisionSettings.class, Integer.class, Integer.class, Integer.class};
     private List<Part> parts;
     private PercentConverter percentConverter = new PercentConverter();
 
@@ -162,9 +167,31 @@ public class PartsTableModel extends AbstractObjectTableModel implements Propert
                 return part.getPlacementCount();
             case 9:
                 return part.getAssignedFeeders();
+            case 10:
+                return getStockLevel(part);
             default:
                 return null;
         }
+    }
+
+    private Integer getStockLevel(Part part) {
+        Machine m = Configuration.get().getMachine();
+        if (!(m instanceof ReferenceMachine)) {
+            return null;
+        }
+        PartDatabase db = ((ReferenceMachine) m).getPartDatabase();
+        if (!(db instanceof PartDbDatabase)) {
+            return null;
+        }
+        PartDbDatabase pdb = (PartDbDatabase) db;
+        if (!pdb.isConnected()) {
+            return null;
+        }
+        Integer stock = pdb.getStockLevel(part.getId());
+        if (stock == null) {
+            return null;
+        }
+        return stock - pdb.getPendingCount(part.getId());
     }
 
     @Override
