@@ -1,5 +1,7 @@
 package org.openpnp.spi.base;
 
+import java.util.Objects;
+
 import javax.swing.Action;
 import javax.swing.Icon;
 
@@ -31,10 +33,13 @@ public abstract class AbstractPartDatabase extends AbstractModelObject implement
 
     @Override
     public void setUrl(String url) {
-        Object old = this.url;
+        String old = this.url;
         this.url = url;
         firePropertyChange("url", old, url);
-        connected = false;
+        if (!Objects.equals(old, url) && connected) {
+            connected = false;
+            firePropertyChange("connected", true, false);
+        }
     }
 
     @Override
@@ -44,10 +49,13 @@ public abstract class AbstractPartDatabase extends AbstractModelObject implement
 
     @Override
     public void setApiToken(String token) {
-        Object old = this.apiToken;
+        String old = this.apiToken;
         this.apiToken = token;
         firePropertyChange("apiToken", old, token);
-        connected = false;
+        if (!Objects.equals(old, token) && connected) {
+            connected = false;
+            firePropertyChange("connected", true, false);
+        }
     }
 
     // PropertySheetHolder boilerplate

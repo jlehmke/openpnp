@@ -132,6 +132,7 @@ public class Icons {
     public static Icon partDbAdd = getIcon("/icons/partdb-add.svg");
     public static Icon partDbPull = getIcon("/icons/partdb-pull.svg");
     public static Icon partDbPush = getIcon("/icons/partdb-push.svg");
+    public static Icon partDbSync = getIcon("/icons/partdb-sync.svg");
 
     public static Icon getIcon(String resourceName, int width, int height) {
         if (resourceName.endsWith(".svg")) {
