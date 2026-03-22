@@ -92,8 +92,14 @@ public class PartDbDatabase extends AbstractPartDatabase {
     @Override
     public void connect() throws Exception {
         connected = false;
-        request("GET", "/api/tokens/current", null);
+        try {
+            request("GET", "/api/tokens/current", null);
+        } catch (Exception e) {
+            firePropertyChange("connected", true, false);
+            throw e;
+        }
         connected = true;
+        firePropertyChange("connected", false, true);
         Logger.info("PartDB connected to {}", url);
     }
 
@@ -167,22 +173,29 @@ public class PartDbDatabase extends AbstractPartDatabase {
             return;
         }
         String[] parts = kicadFootprint.split(":", 2);
-        File kicadFile = new File(kicadLibraryPath, parts[0] + ".pretty/" + parts[1] + ".kicad_mod");
-        if (!kicadFile.exists()) {
-            Logger.debug("PartDB: KiCad file not found: {}", kicadFile);
+        for (String base : kicadLibraryPath.split("\\n")) {
+            base = base.trim();
+            if (base.isEmpty()) {
+                continue;
+            }
+            File kicadFile = new File(base, parts[0] + ".pretty/" + parts[1] + ".kicad_mod");
+            if (!kicadFile.exists()) {
+                continue;
+            }
+            try {
+                List<Footprint.Pad> pads = new KicadModImporter(kicadFile).getPads();
+                Footprint fp = pkg.getFootprint();
+                fp.getPads().clear();
+                for (Footprint.Pad pad : pads) {
+                    fp.addPad(pad);
+                }
+                Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), kicadFile.getName());
+            } catch (Exception e) {
+                Logger.warn("PartDB: could not import KiCad pads from '{}': {}", kicadFile, e.getMessage());
+            }
             return;
         }
-        try {
-            List<Footprint.Pad> pads = new KicadModImporter(kicadFile).getPads();
-            Footprint fp = pkg.getFootprint();
-            fp.getPads().clear();
-            for (Footprint.Pad pad : pads) {
-                fp.addPad(pad);
-            }
-            Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), kicadFile.getName());
-        } catch (Exception e) {
-            Logger.warn("PartDB: could not import KiCad pads from '{}': {}", kicadFile, e.getMessage());
-        }
+        Logger.debug("PartDB: kicad_footprint '{}' not found in any library path", kicadFootprint);
     }
 
     private JsonObject findPartByName(String name) throws Exception {
