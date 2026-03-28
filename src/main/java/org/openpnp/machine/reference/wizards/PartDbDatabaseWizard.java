@@ -215,7 +215,12 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
                         FormSpecs.DEFAULT_ROWSPEC,
                 }));
 
-        kicadPanel.add(new JLabel("Library Paths"), "2, 2, right, top");
+        JLabel kicadLibLabel = new JLabel("<html>Library Paths<br><small>(local or HTTP)</small></html>");
+        kicadLibLabel.setToolTipText("<html>One path or URL per line.<br>"
+                + "Local: <tt>/usr/share/kicad/footprints</tt><br>"
+                + "HTTP:&nbsp;&nbsp;<tt>https://raw.githubusercontent.com/KiCad/KiCad-Footprints/master</tt><br>"
+                + "URL resolves to: <tt>{base}/{Library}.pretty/{Footprint}.kicad_mod</tt></html>");
+        kicadPanel.add(kicadLibLabel, "2, 2, right, top");
         kicadLibraryPathField = new JTextArea(4, 0);
         kicadLibraryPathField.setLineWrap(false);
         kicadPanel.add(new JScrollPane(kicadLibraryPathField), "4, 2");
