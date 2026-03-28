@@ -1,19 +1,19 @@
 /*
  * Copyright (C) 2023 Jason von Nieda <jason@vonnieda.org>
- * 
+ *
  * This file is part of OpenPnP.
- * 
+ *
  * OpenPnP is free software: you can redistribute it and/or modify it under the terms of the GNU
  * General Public License as published by the Free Software Foundation, either version 3 of the
  * License, or (at your option) any later version.
- * 
+ *
  * OpenPnP is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
  * the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
  * Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License along with OpenPnP. If not, see
  * <http://www.gnu.org/licenses/>.
- * 
+ *
  * For more information about OpenPnP visit http://openpnp.org
  */
 
@@ -24,6 +24,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.io.FileReader;
+import java.io.StringReader;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
@@ -35,22 +36,22 @@ import org.openpnp.model.Footprint.Pad;
 
 /**
  * @author Jonas Lehmke <jonas@lehmke.xyz>
- * 
+ *
  * This module reads a KiCad footprint from file (*.kicad_mod) and parses it to a Footprint instance.
- * Rectangular, rounded rectangular, circular and oval pad shapes are supported. Trapezoid and custom 
- * pad shapes are ignored. A FileDialog is openened to select a file once this class is instantiated. 
+ * Rectangular, rounded rectangular, circular and oval pad shapes are supported. Trapezoid and custom
+ * pad shapes are ignored. A FileDialog is openened to select a file once this class is instantiated.
  * Imported pads are available as List<Pad>.
- * 
+ *
  * This module may become part of an all-in-one KiCad board import one day.
  */
 
- 
+
 public class KicadModImporter {
 
     Footprint footprint = new Footprint();
 
     public class KicadPad {
-    
+
         String padDefinition;
 
         public KicadPad(String definition) {
@@ -164,7 +165,7 @@ public class KicadModImporter {
             if (fileDialog.getFile() == null) {
                 return;
             }
-            parseFile(new File(new File(fileDialog.getDirectory()), fileDialog.getFile()));
+            parseContent(new BufferedReader(new FileReader(new File(new File(fileDialog.getDirectory()), fileDialog.getFile()))));
         }
         catch (Exception e) {
             throw new Exception(Translations.getString("KicadModImporter.LoadFile.Fail") + e.getMessage()); //$NON-NLS-1$
@@ -174,16 +175,24 @@ public class KicadModImporter {
     /** Parses a .kicad_mod file directly without opening a dialog. Suitable for programmatic use and unit tests. */
     public KicadModImporter(File file) throws Exception {
         try {
-            parseFile(file);
+            parseContent(new BufferedReader(new FileReader(file)));
         }
         catch (Exception e) {
             throw new Exception(Translations.getString("KicadModImporter.LoadFile.Fail") + e.getMessage()); //$NON-NLS-1$
         }
     }
 
-    private void parseFile(File file) throws Exception {
-        BufferedReader reader = new BufferedReader(new FileReader(file));
+    /** Parses .kicad_mod content from a string (e.g. downloaded via HTTP). */
+    public KicadModImporter(String content) throws Exception {
+        try {
+            parseContent(new BufferedReader(new StringReader(content)));
+        }
+        catch (Exception e) {
+            throw new Exception(Translations.getString("KicadModImporter.LoadFile.Fail") + e.getMessage()); //$NON-NLS-1$
+        }
+    }
 
+    private void parseContent(BufferedReader reader) throws Exception {
         String line = reader.readLine();
         while (line != null) {
             if (line.trim().startsWith("(pad ")) {
