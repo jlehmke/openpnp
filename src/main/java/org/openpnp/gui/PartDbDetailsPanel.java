@@ -73,10 +73,11 @@ public class PartDbDetailsPanel extends JPanel {
     private final JLabel imgLabel;
     private final JPanel imgWrapper;
     private final JTextField nameLabel;
+    private final JLabel idLabel;
     private final JTextField mpnLabel;
     private final JTextField ipnLabel;
     private final JTextField pkgLabel;
-    private final JTextArea descLabel;
+    private final JTextField descLabel;
     private final JTextField kicadFootprintField;
     private final JButton applyPadsBtn;
     private PartDbRawData rawData;
@@ -116,12 +117,28 @@ public class PartDbDetailsPanel extends JPanel {
             }
         });
 
-        nameLabel = new JTextField(" ");
+        nameLabel = new JTextField(" ") {
+            @Override public Dimension getMaximumSize() {
+                return new Dimension(getPreferredSize().width, getPreferredSize().height);
+            }
+        };
         nameLabel.setEditable(false);
         nameLabel.setOpaque(false);
         nameLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
-        nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 15f));
-        nameLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE, nameLabel.getPreferredSize().height));
+        float baseFontSize = nameLabel.getFont().getSize2D();
+        nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, baseFontSize * 1.33f));
+
+        idLabel = new JLabel(" ");
+        idLabel.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
+
+        JPanel nameRow = new JPanel();
+        nameRow.setLayout(new BoxLayout(nameRow, BoxLayout.X_AXIS));
+        nameRow.setOpaque(false);
+        nameRow.setAlignmentX(LEFT_ALIGNMENT);
+        nameRow.add(nameLabel);
+        nameRow.add(idLabel);
+        nameRow.add(Box.createHorizontalGlue());
+        nameRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, nameRow.getPreferredSize().height));
 
         mpnLabel = new JTextField(" ");
         mpnLabel.setEditable(false);
@@ -141,31 +158,26 @@ public class PartDbDetailsPanel extends JPanel {
         pkgLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
         pkgLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE, pkgLabel.getPreferredSize().height));
 
-        descLabel = new JTextArea();
+        descLabel = new JTextField(" ");
         descLabel.setEditable(false);
-        descLabel.setLineWrap(true);
-        descLabel.setWrapStyleWord(true);
         descLabel.setOpaque(false);
-        descLabel.setFont(new JLabel().getFont());
-        descLabel.setRows(2);
-
-        JScrollPane descScroll = new JScrollPane(descLabel);
-        nameLabel.setAlignmentX(LEFT_ALIGNMENT);
+        descLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
+        descLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE, descLabel.getPreferredSize().height));
         mpnLabel.setAlignmentX(LEFT_ALIGNMENT);
         ipnLabel.setAlignmentX(LEFT_ALIGNMENT);
         pkgLabel.setAlignmentX(LEFT_ALIGNMENT);
-        descScroll.setAlignmentX(LEFT_ALIGNMENT);
+        descLabel.setAlignmentX(LEFT_ALIGNMENT);
 
         JPanel infoPanel = new JPanel();
         infoPanel.setLayout(new BoxLayout(infoPanel, BoxLayout.Y_AXIS));
         infoPanel.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 0));
-        infoPanel.add(nameLabel);
+        infoPanel.add(nameRow);
         infoPanel.add(Box.createVerticalStrut(2));
         infoPanel.add(mpnLabel);
         infoPanel.add(ipnLabel);
         infoPanel.add(pkgLabel);
         infoPanel.add(Box.createVerticalStrut(2));
-        infoPanel.add(descScroll);
+        infoPanel.add(descLabel);
 
         JPanel headerPanel = new JPanel(new BorderLayout(4, 0));
         headerPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
@@ -174,26 +186,22 @@ public class PartDbDetailsPanel extends JPanel {
 
         // --- Parameters table ---
         tableModel = new DetailsTableModel();
-        JTable table = new JTable(tableModel);
+        JTable table = new JTable(tableModel) {
+            @Override
+            public void doLayout() {
+                int total = getWidth();
+                if (total > 0) {
+                    getColumnModel().getColumn(0).setPreferredWidth((int) (total * 0.4));
+                    getColumnModel().getColumn(1).setPreferredWidth((int) (total * 0.2));
+                    getColumnModel().getColumn(2).setPreferredWidth((int) (total * 0.2));
+                    getColumnModel().getColumn(3).setPreferredWidth((int) (total * 0.2));
+                }
+                super.doLayout();
+            }
+        };
         table.setDefaultRenderer(Object.class, new ConflictRenderer());
         table.setRowHeight(22);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
-        // Column 0 (Property): size to fit content; columns 1-3: equal share of remaining width.
-        table.addComponentListener(new ComponentAdapter() {
-            @Override public void componentResized(ComponentEvent e) {
-                int col0Width = 0;
-                for (int row = 0; row < tableModel.getRowCount(); row++) {
-                    Component c = table.prepareRenderer(table.getCellRenderer(row, 0), row, 0);
-                    col0Width = Math.max(col0Width, c.getPreferredSize().width + 8);
-                }
-                int total = table.getWidth();
-                int dataWidth = Math.max(0, total - col0Width) / 3;
-                table.getColumnModel().getColumn(0).setPreferredWidth(col0Width);
-                table.getColumnModel().getColumn(1).setPreferredWidth(dataWidth);
-                table.getColumnModel().getColumn(2).setPreferredWidth(dataWidth);
-                table.getColumnModel().getColumn(3).setPreferredWidth(dataWidth);
-            }
-        });
         kicadFootprintField = new JTextField();
         kicadFootprintField.setEditable(false);
         applyPadsBtn = new JButton("Apply Pads");
@@ -207,9 +215,13 @@ public class PartDbDetailsPanel extends JPanel {
         kicadRow.add(kicadFootprintField, BorderLayout.CENTER);
         kicadRow.add(applyPadsBtn, BorderLayout.EAST);
 
+        JPanel paramsTable = new JPanel(new BorderLayout());
+        paramsTable.add(table.getTableHeader(), BorderLayout.NORTH);
+        paramsTable.add(table, BorderLayout.CENTER);
+
         JPanel paramsPanel = new JPanel(new BorderLayout());
         paramsPanel.setBorder(new TitledBorder("Parameters"));
-        paramsPanel.add(new JScrollPane(table), BorderLayout.CENTER);
+        paramsPanel.add(paramsTable, BorderLayout.CENTER);
         paramsPanel.add(kicadRow, BorderLayout.SOUTH);
 
         // --- Lots table ---
@@ -219,14 +231,12 @@ public class PartDbDetailsPanel extends JPanel {
         lotsTable.setRowHeight(22);
         lotsTable.getColumnModel().getColumn(0).setPreferredWidth(30);   // Active
         lotsTable.getColumnModel().getColumn(0).setMaxWidth(30);
-        lotsTable.getColumnModel().getColumn(1).setPreferredWidth(50);   // ID
-        lotsTable.getColumnModel().getColumn(1).setMaxWidth(70);
+        lotsTable.getColumnModel().getColumn(1).setPreferredWidth(80);   // ID
+        lotsTable.getColumnModel().getColumn(1).setMaxWidth(100);
         lotsTable.getColumnModel().getColumn(2).setPreferredWidth(180);  // Description
         lotsTable.getColumnModel().getColumn(3).setPreferredWidth(150);  // Storage Location
-        lotsTable.getColumnModel().getColumn(4).setPreferredWidth(70);   // Amount
-        lotsTable.getColumnModel().getColumn(4).setMaxWidth(90);
-        lotsTable.setPreferredScrollableViewportSize(
-                new Dimension(0, 5 * lotsTable.getRowHeight()));
+        lotsTable.getColumnModel().getColumn(4).setPreferredWidth(80);   // Amount
+        lotsTable.getColumnModel().getColumn(4).setMaxWidth(100);
 
         qtySpinner = new JSpinner(new SpinnerNumberModel(1, 1, 9999, 1));  // integers only
         ((JSpinner.DefaultEditor) qtySpinner.getEditor()).getTextField().setColumns(4);
@@ -248,9 +258,13 @@ public class PartDbDetailsPanel extends JPanel {
         adjustRight.add(removeStockBtn);
         adjustPanel.add(adjustRight, BorderLayout.EAST);
 
+        JPanel lotsTable = new JPanel(new BorderLayout());
+        lotsTable.add(this.lotsTable.getTableHeader(), BorderLayout.NORTH);
+        lotsTable.add(this.lotsTable, BorderLayout.CENTER);
+
         JPanel lotsPanel = new JPanel(new BorderLayout());
         lotsPanel.setBorder(new TitledBorder("Stock Lots"));
-        lotsPanel.add(new JScrollPane(lotsTable), BorderLayout.CENTER);
+        lotsPanel.add(lotsTable, BorderLayout.CENTER);
         lotsPanel.add(adjustPanel, BorderLayout.SOUTH);
 
         JPanel centerPanel = new JPanel(new BorderLayout(0, 0));
@@ -279,8 +293,12 @@ public class PartDbDetailsPanel extends JPanel {
         bottomBar.add(statusLabel, BorderLayout.CENTER);
         bottomBar.add(rightBtns, BorderLayout.EAST);
 
-        add(headerPanel, BorderLayout.NORTH);
-        add(centerPanel, BorderLayout.CENTER);
+        JPanel scrollContent = new JPanel(new BorderLayout(0, 4));
+        scrollContent.add(headerPanel, BorderLayout.NORTH);
+        scrollContent.add(centerPanel, BorderLayout.CENTER);
+        add(new JScrollPane(scrollContent,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER), BorderLayout.CENTER);
         add(bottomBar, BorderLayout.SOUTH);
     }
 
@@ -369,7 +387,7 @@ public class PartDbDetailsPanel extends JPanel {
         new SwingWorker<Integer, Void>() {
             @Override
             protected Integer doInBackground() throws Exception {
-                return db.adjustLotAmount(lotId, delta);
+                return db.adjustLotAmount(part.getId(), lotId, delta);
             }
             @Override
             protected void done() {
@@ -484,18 +502,20 @@ public class PartDbDetailsPanel extends JPanel {
         imgOriginal = null;
         imgLabel.setIcon(null);
         nameLabel.setText(" ");
+        idLabel.setText(" ");
         mpnLabel.setText(" ");
         ipnLabel.setText(" ");
         pkgLabel.setText(" ");
-        descLabel.setText("");
+        descLabel.setText(" ");
     }
 
     private void populateHeader(PartDbRawData d, byte[] imgBytes) {
         nameLabel.setText(d.partName != null ? d.partName : " ");
+        idLabel.setText("(ID: " + d.partDbId + ")");
         mpnLabel.setText(d.mpn != null ? "MPN: " + d.mpn : " ");
         ipnLabel.setText(d.ipn != null ? "IPN: " + d.ipn : " ");
         pkgLabel.setText(d.packageName != null ? "Package: " + d.packageName : " ");
-        descLabel.setText(d.description != null ? d.description : "");
+        descLabel.setText(d.description != null ? "Description: " + d.description : " ");
 
         imgOriginal = null;
         if (imgBytes != null) {
@@ -583,7 +603,7 @@ public class PartDbDetailsPanel extends JPanel {
     // -------------------------------------------------------------------------
 
     private class LotsTableModel extends AbstractTableModel {
-        @Override public int getRowCount()    { return rawData == null ? 0 : rawData.lots.size(); }
+        @Override public int getRowCount()    { return rawData == null ? 1 : rawData.lots.size(); }
         @Override public int getColumnCount() { return 5; }
         @Override public String getColumnName(int col) {
             switch (col) {
@@ -605,6 +625,9 @@ public class PartDbDetailsPanel extends JPanel {
         }
         @Override public boolean isCellEditable(int row, int col) { return col == 0; }
         @Override public Object getValueAt(int row, int col) {
+            if (rawData == null) {
+                return col == 0 ? Boolean.FALSE : null;
+            }
             PartDbLot lot = rawData.lots.get(row);
             switch (col) {
                 case 0: return lot.id == db.getSelectedLotId(part.getId());

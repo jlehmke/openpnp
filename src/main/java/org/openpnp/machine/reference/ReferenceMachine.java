@@ -145,7 +145,7 @@ public class ReferenceMachine extends AbstractMachine {
     private KicadLibrary kicadLibrary = new KicadLibrary();
 
     @Element(required = false)
-    protected PartDatabase partDatabase = null;
+    protected PartDatabase partDatabase = new PartDbDatabase();
 
     @Element(required = false)
     private boolean homeAfterEnabled = false;
@@ -412,10 +412,7 @@ public class ReferenceMachine extends AbstractMachine {
         children.add(new SimplePropertySheetHolder(Translations.getString(
                 "ReferenceMachine.PropertySheetHolder.JobProcessors.title"), Arrays.asList(getPnpJobProcessor()))); //$NON-NLS-1$
         children.add(new SimplePropertySheetHolder("Integrations",
-                Arrays.asList(kicadLibrary)));
-        if (partDatabase != null) {
-            children.add(partDatabase);
-        }
+                Arrays.asList(kicadLibrary, partDatabase)));
 
         List<PropertySheetHolder> vision = new ArrayList<>();
         for (PartAlignment alignment : getPartAlignments()) {
