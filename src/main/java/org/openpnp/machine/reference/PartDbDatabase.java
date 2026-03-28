@@ -204,6 +204,9 @@ public class PartDbDatabase extends AbstractPartDatabase {
     /** In-RAM cache: OpenPnP part name → PartDB numeric ID. Never persisted. */
     private final transient Map<String, Integer> partIdCache = new ConcurrentHashMap<>();
 
+    /** In-RAM cache for fetched .kicad_mod content: URL → text. Never persisted. */
+    private final transient Map<String, String> kicadUrlCache = new ConcurrentHashMap<>();
+
     /** Pending placement counts not yet flushed to PartDB: partId → count. */
     private final transient Map<String, Integer> pendingPlacements = new ConcurrentHashMap<>();
 
@@ -306,6 +309,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
     public void connect() throws Exception {
         connected = false;
         partIdCache.clear();
+        kicadUrlCache.clear();
         try {
             request("GET", "/api/tokens/current", null);
         } catch (Exception e) {
@@ -495,6 +499,41 @@ public class PartDbDatabase extends AbstractPartDatabase {
             if (base.isEmpty()) {
                 continue;
             }
+
+            // ── HTTP base URL ─────────────────────────────────────────────────
+            if (base.startsWith("http://") || base.startsWith("https://")) {
+                String normalizedBase = base.replaceAll("/+$", "");
+                String fileUrl;
+                if (normalizedBase.endsWith(".pretty")) {
+                    String dirLib = normalizedBase.substring(normalizedBase.lastIndexOf('/') + 1)
+                                                  .replace(".pretty", "");
+                    if (!dirLib.equals(libName)) {
+                        continue;
+                    }
+                    fileUrl = normalizedBase + "/" + fpName + ".kicad_mod";
+                } else {
+                    fileUrl = normalizedBase + "/" + libName + ".pretty/" + fpName + ".kicad_mod";
+                }
+                try {
+                    String content = fetchKicadUrl(fileUrl);
+                    if (content == null) {
+                        continue; // 404 — try next base URL
+                    }
+                    List<Footprint.Pad> pads = new KicadModImporter(content).getPads();
+                    Footprint fp = pkg.getFootprint();
+                    fp.getPads().clear();
+                    for (Footprint.Pad pad : pads) {
+                        fp.addPad(pad);
+                    }
+                    Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), fileUrl);
+                    return true;
+                } catch (Exception e) {
+                    Logger.warn("PartDB: could not import KiCad pads from '{}': {}", fileUrl, e.getMessage());
+                    return false;
+                }
+            }
+
+            // ── Filesystem path ───────────────────────────────────────────────
             File kicadFile;
             if (base.endsWith(".pretty")) {
                 // Each line points directly at a .pretty library directory.
@@ -527,6 +566,36 @@ public class PartDbDatabase extends AbstractPartDatabase {
         }
         Logger.debug("PartDB: kicad_footprint '{}' not found in any library path", kicadFootprint);
         return false;
+    }
+
+    /**
+     * Fetches text content of a .kicad_mod file from an HTTP URL.
+     * Returns null on 404 (caller should try the next base URL).
+     * Results are cached in kicadUrlCache for the session.
+     */
+    private String fetchKicadUrl(String url) throws Exception {
+        String cached = kicadUrlCache.get(url);
+        if (cached != null) {
+            Logger.debug("PartDB KiCad cache hit: {}", url);
+            return cached;
+        }
+        Logger.debug("PartDB KiCad fetching: {}", url);
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .build();
+        HttpResponse<String> resp = httpClient.send(req,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (resp.statusCode() == 404) {
+            return null;
+        }
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new IOException("HTTP " + resp.statusCode() + " fetching " + url);
+        }
+        String content = resp.body();
+        kicadUrlCache.put(url, content);
+        return content;
     }
 
     private JsonObject findPartByName(String name) throws Exception {
