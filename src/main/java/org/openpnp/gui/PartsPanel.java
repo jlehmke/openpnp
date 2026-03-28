@@ -21,6 +21,7 @@ package org.openpnp.gui;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
@@ -56,7 +57,9 @@ import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.JToolBar;
 import javax.swing.ListSelectionModel;
+import javax.swing.JProgressBar;
 import javax.swing.SwingConstants;
+import javax.swing.SwingWorker;
 import javax.swing.SwingUtilities;
 import javax.swing.RowFilter;
 import javax.swing.table.DefaultTableCellRenderer;
@@ -126,6 +129,7 @@ public class PartsPanel extends JPanel implements WizardContainer {
     private HashMap<Class, Integer> lastSelectedTabIndex = new HashMap<>();
     private TableColumn stockColumn;
     private JButton flushStockBtn;
+    private JProgressBar stockRefreshBar;
 
     public PartsPanel(Configuration configuration, Frame frame) {
         this.configuration = configuration;
@@ -151,6 +155,12 @@ public class PartsPanel extends JPanel implements WizardContainer {
 
         JPanel panel_1 = new JPanel();
         toolbarAndSearch.add(panel_1, BorderLayout.EAST);
+
+        stockRefreshBar = new JProgressBar();
+        stockRefreshBar.setStringPainted(true);
+        stockRefreshBar.setPreferredSize(new Dimension(150, stockRefreshBar.getPreferredSize().height));
+        stockRefreshBar.setVisible(false);
+        panel_1.add(stockRefreshBar);
 
         JLabel lblSearch = new JLabel(Translations.getString("PartsPanel.SearchLabel.text")); //$NON-NLS-1$
         panel_1.add(lblSearch);
@@ -268,12 +278,28 @@ public class PartsPanel extends JPanel implements WizardContainer {
         flushStockBtn.setToolTipText("Sync stock: push pending placements and refresh from database");
         flushStockBtn.setVisible(false);
         flushStockBtn.setEnabled(false);
-        flushStockBtn.addActionListener(e -> UiUtils.messageBoxOnException(() -> {
+        flushStockBtn.addActionListener(e -> {
             if (partDb != null) {
-                partDb.flushPlacements();
-                partDb.refreshStockLevels();
+                flushStockBtn.setEnabled(false);
+                new SwingWorker<Void, Void>() {
+                    @Override
+                    protected Void doInBackground() throws Exception {
+                        partDb.flushPlacements();
+                        partDb.refreshStockLevels();
+                        return null;
+                    }
+                    @Override
+                    protected void done() {
+                        flushStockBtn.setEnabled(true);
+                        try {
+                            get();
+                        } catch (Exception ex) {
+                            UiUtils.showError(ex);
+                        }
+                    }
+                }.execute();
             }
-        }));
+        });
         toolBar.add(flushStockBtn);
 
         table.getSelectionModel().addListSelectionListener(new ListSelectionListener() {
@@ -344,14 +370,10 @@ public class PartsPanel extends JPanel implements WizardContainer {
                             return this;
                         }
                     }
-                    setBackground(tbl.getBackground());
                 }
                 return this;
             }
         });
-
-        updateStockColumnVisibility();
-        updateFlushButton();
 
         partDb.addPropertyChangeListener("connected", evt ->
                 SwingUtilities.invokeLater(() -> {
@@ -374,9 +396,36 @@ public class PartsPanel extends JPanel implements WizardContainer {
         partDb.addPropertyChangeListener("disableAutoFlushOnShutdown", evt ->
                 SwingUtilities.invokeLater(this::updateFlushButton));
         partDb.addPropertyChangeListener("stockLevels", evt ->
-                SwingUtilities.invokeLater(tableModel::fireTableDataChanged));
+                SwingUtilities.invokeLater(() -> {
+                    Part saved = selectedPart;
+                    tableModel.fireTableDataChanged();
+                    if (saved != null) {
+                        for (int i = 0; i < tableModel.getRowCount(); i++) {
+                            if (tableModel.getRowObjectAt(i) == saved) {
+                                int viewRow = table.convertRowIndexToView(i);
+                                table.getSelectionModel().setSelectionInterval(viewRow, viewRow);
+                                break;
+                            }
+                        }
+                    }
+                }));
         partDb.addPropertyChangeListener("pendingPlacements", evt ->
                 SwingUtilities.invokeLater(tableModel::fireTableDataChanged));
+        partDb.addPropertyChangeListener("stockRefreshProgress", evt ->
+                SwingUtilities.invokeLater(() -> {
+                    int progress = (Integer) evt.getNewValue();
+                    if (progress < 0) {
+                        stockRefreshBar.setVisible(false);
+                    } else {
+                        stockRefreshBar.setMaximum(partDb.getStockRefreshTotal());
+                        stockRefreshBar.setValue(progress);
+                        stockRefreshBar.setString(progress + " / " + partDb.getStockRefreshTotal());
+                        stockRefreshBar.setVisible(true);
+                    }
+                }));
+
+        updateStockColumnVisibility();
+        updateFlushButton();
     }
 
     private void updateStockColumnVisibility() {
@@ -736,6 +785,9 @@ public class PartsPanel extends JPanel implements WizardContainer {
         if (selectedPart != null) {
             priorPartId = selectedPart.getId();
             this.selectedPart = selectedPart;
+            if (partDb != null && partDb.isEnabled()) {
+                tabbedPane.add("Part Database", new PartDbDetailsPanel(selectedPart, partDb));
+            }
             Wizard wizard = new PartSettingsWizard(selectedPart);
             wizard.setWizardContainer(PartsPanel.this);
             tabbedPane.add(Translations.getString("PartsPanel.SettingsTab.title"), //$NON-NLS-1$
@@ -756,10 +808,6 @@ public class PartsPanel extends JPanel implements WizardContainer {
                 wizard.setWizardContainer(PartsPanel.this);
                 tabbedPane.add(wizard.getWizardName(), (JPanel) wizard);
             }
-            if (partDb != null && partDb.isEnabled()) {
-                tabbedPane.add("Part Database", new PartDbDetailsPanel(selectedPart, partDb));
-            }
-
             MainFrame mainFrame = MainFrame.get();
             if (mainFrame.getTabs().getSelectedComponent() == mainFrame.getPartsTab()
                     && Configuration.get().getTablesLinked() == TablesLinked.Linked) {

@@ -142,7 +142,7 @@ public class ReferenceMachine extends AbstractMachine {
     protected MotionPlanner motionPlanner = new NullMotionPlanner();
 
     @Element(required = false)
-    protected PartDatabase partDatabase = null;
+    protected PartDatabase partDatabase = new PartDbDatabase();
 
     @Element(required = false)
     private boolean homeAfterEnabled = false;
@@ -404,9 +404,8 @@ public class ReferenceMachine extends AbstractMachine {
                 "ReferenceMachine.PropertySheetHolder.Drivers.title"), getDrivers(), null)); //$NON-NLS-1$
         children.add(new SimplePropertySheetHolder(Translations.getString(
                 "ReferenceMachine.PropertySheetHolder.JobProcessors.title"), Arrays.asList(getPnpJobProcessor()))); //$NON-NLS-1$
-        if (partDatabase != null) {
-            children.add(partDatabase);
-        }
+        children.add(new SimplePropertySheetHolder("Integrations",
+                Arrays.asList(partDatabase)));
 
         List<PropertySheetHolder> vision = new ArrayList<>();
         for (PartAlignment alignment : getPartAlignments()) {

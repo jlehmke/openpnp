@@ -201,6 +201,9 @@ public class PartDbDatabase extends AbstractPartDatabase {
     /** Cached stock levels: partId → total amount across all lots. Absent = not fetched. */
     private final transient Map<String, Integer> stockCache = new HashMap<>();
 
+    /** In-RAM cache: OpenPnP part name → PartDB numeric ID. Never persisted. */
+    private final transient Map<String, Integer> partIdCache = new ConcurrentHashMap<>();
+
     /** Pending placement counts not yet flushed to PartDB: partId → count. */
     private final transient Map<String, Integer> pendingPlacements = new ConcurrentHashMap<>();
 
@@ -219,12 +222,23 @@ public class PartDbDatabase extends AbstractPartDatabase {
         return !pendingPlacements.isEmpty();
     }
 
+    /** -1 = idle, 0..N = refresh in progress (current index out of total). */
+    private transient int stockRefreshProgress = -1;
+    private transient int stockRefreshTotal = 0;
+
+    public int getStockRefreshProgress() { return stockRefreshProgress; }
+    public int getStockRefreshTotal()    { return stockRefreshTotal; }
+
     /** Fetches stock levels for all known OpenPnP parts from PartDB and fires "stockLevels". */
     public void refreshStockLevels() {
         if (!connected) {
             return;
         }
-        for (Part part : Configuration.get().getParts()) {
+        List<Part> parts = new ArrayList<>(Configuration.get().getParts());
+        stockRefreshTotal = parts.size();
+        firePropertyChange("stockRefreshProgress", -1, 0);
+        stockRefreshProgress = 0;
+        for (Part part : parts) {
             try {
                 JsonObject partData = findPartByName(part.getId());
                 int stock = partData.get("total_instock").getAsBigDecimal().intValue();
@@ -232,7 +246,12 @@ public class PartDbDatabase extends AbstractPartDatabase {
             } catch (Exception e) {
                 // Part not in PartDB or network error — skip silently.
             }
+            int prev = stockRefreshProgress;
+            stockRefreshProgress = prev + 1;
+            firePropertyChange("stockRefreshProgress", prev, stockRefreshProgress);
         }
+        stockRefreshProgress = -1;
+        firePropertyChange("stockRefreshProgress", parts.size(), -1);
         firePropertyChange("stockLevels", null, stockCache);
     }
 
@@ -286,6 +305,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
     @Override
     public void connect() throws Exception {
         connected = false;
+        partIdCache.clear();
         try {
             request("GET", "/api/tokens/current", null);
         } catch (Exception e) {
@@ -356,7 +376,7 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
     /** Adjusts the amount of a specific lot by delta (positive = add, negative = remove).
      *  Returns the new amount after clamping to 0. */
-    public int adjustLotAmount(int lotId, int delta) throws Exception {
+    public int adjustLotAmount(String partId, int lotId, int delta) throws Exception {
         if (readOnly) {
             throw new Exception("Read-only mode — stock writes are disabled");
         }
@@ -366,7 +386,12 @@ public class PartDbDatabase extends AbstractPartDatabase {
         JsonObject patch = new JsonObject();
         patch.addProperty("amount", updated);
         request("PATCH", "/api/part_lots/" + lotId, patch.toString());
-        refreshStockLevels();
+        int actualDelta = updated - current;
+        Integer oldStock = stockCache.get(partId);
+        if (oldStock != null) {
+            stockCache.put(partId, Math.max(0, oldStock + actualDelta));
+        }
+        firePropertyChange("stockLevels", null, stockCache);
         return updated;
     }
 
@@ -419,6 +444,9 @@ public class PartDbDatabase extends AbstractPartDatabase {
     public void updatePart(Part part) throws Exception {
         JsonObject partData = findPartByName(part.getId());
         applyPartData(part, partData, true);
+        int stock = partData.get("total_instock").getAsBigDecimal().intValue();
+        stockCache.put(part.getId(), stock);
+        firePropertyChange("stockLevels", null, stockCache);
         Logger.info("PartDB: updated part '{}'", part.getId());
     }
 
@@ -436,6 +464,14 @@ public class PartDbDatabase extends AbstractPartDatabase {
             Logger.warn("PartDB: could not push height parameter ({}): {}",
                     e.getClass().getSimpleName(), e.getMessage());
         }
+        Integer pending = pendingPlacements.remove(part.getId());
+        if (pending != null && pending > 0) {
+            adjustStock(part.getId(), pending);
+            firePropertyChange("pendingPlacements", null, pendingPlacements);
+        }
+        JsonObject refreshed = parseObject(request("GET", "/api/parts/" + partDbId, null));
+        stockCache.put(part.getId(), refreshed.get("total_instock").getAsBigDecimal().intValue());
+        firePropertyChange("stockLevels", null, stockCache);
     }
 
     // -------------------------------------------------------------------------
@@ -494,15 +530,21 @@ public class PartDbDatabase extends AbstractPartDatabase {
     }
 
     private JsonObject findPartByName(String name) throws Exception {
+        Integer cachedId = partIdCache.get(name);
+        if (cachedId != null) {
+            return parseObject(request("GET", "/api/parts/" + cachedId, null));
+        }
         String json = request("GET", "/api/parts/?name=" + urlEncode(name), null);
         JsonArray results = parseArray(json);
         if (results.size() == 0) {
             throw new Exception("PartDB: no part found with name '" + name + "'");
         }
-        return results.get(0).getAsJsonObject();
+        JsonObject part = results.get(0).getAsJsonObject();
+        partIdCache.put(name, part.get("id").getAsInt());
+        return part;
     }
 
-    /** A single stock lot from PartDB. */
+/** A single stock lot from PartDB. */
     public static class PartDbLot {
         public final int id;
         public final String description;
@@ -569,9 +611,8 @@ public class PartDbDatabase extends AbstractPartDatabase {
     /** Fetches all managed values from PartDB for the given part name, keeping part-level and
      *  footprint-level values separate so callers can detect conflicts. */
     public PartDbRawData fetchRawData(String partName) throws Exception {
-        JsonObject summary = findPartByName(partName);
-        int partId = summary.get("id").getAsInt();
-        JsonObject detail = parseObject(request("GET", "/api/parts/" + partId, null));
+        JsonObject detail = findPartByName(partName);
+        int partId = detail.get("id").getAsInt();
 
         String dbPartName = detail.has("name") ? detail.get("name").getAsString() : null;
 
@@ -767,10 +808,11 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
         // Always fetch the part detail — the search result omits parameters and may omit footprint.
         String newPkgName = null;
+        String newKicadFootprint = null;
         Length newHeight = null;
         Double newBodyWidth = null;
         Double newBodyLength = null;
-        String newKicadFootprint = null;
+        boolean hasPartDbFootprint = false;
         if (data.has("id")) {
             try {
                 String detailJson = request("GET", "/api/parts/" + data.get("id").getAsInt(), null);
@@ -794,27 +836,36 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
                 JsonArray partParams = detail.has("parameters") ? detail.getAsJsonArray("parameters") : null;
 
-                // Fetch footprint detail once for eda_info fallback and footprint-level parameters.
+                // Fetch footprint detail for package data (dimensions, KiCad footprint).
                 JsonArray fpParams = null;
                 if (footprintId >= 0) {
                     try {
                         String fpJson = request("GET", "/api/footprints/" + footprintId, null);
                         JsonObject fpDetail = parseObject(fpJson);
-                        fpParams = fpDetail.has("parameters") ? fpDetail.getAsJsonArray("parameters") : null;
+                        fpParams = fpDetail.has("parameters")
+                                ? fpDetail.getAsJsonArray("parameters") : null;
                         if (newKicadFootprint == null) {
                             newKicadFootprint = extractKicadFootprint(fpDetail);
                         }
+                        hasPartDbFootprint = true;
                     } catch (Exception e) {
                         Logger.debug("PartDB: could not fetch footprint detail: {}", e.getMessage());
                     }
                 }
 
+                // No PartDB footprint assigned but a KiCad reference exists — use the module
+                // name (the part after ':') as the package ID so the pads can be imported.
+                if (newPkgName == null && newKicadFootprint != null && newKicadFootprint.contains(":")) {
+                    newPkgName = newKicadFootprint.split(":", 2)[1];
+                }
+
+                // Resolve body dims and height from part params first, footprint params as fallback.
+                newBodyWidth  = resolveParamValue("width",  partParams, fpParams);
+                newBodyLength = resolveParamValue("length", partParams, fpParams);
                 Double h = resolveParamValue("height", partParams, fpParams);
                 if (h != null) {
                     newHeight = new Length(h, LengthUnit.Millimeters);
                 }
-                newBodyWidth  = resolveParamValue("width",  partParams, fpParams);
-                newBodyLength = resolveParamValue("length", partParams, fpParams);
 
             } catch (Exception e) {
                 Logger.debug("PartDB: could not fetch part detail: {}", e.getMessage());
@@ -824,11 +875,13 @@ public class PartDbDatabase extends AbstractPartDatabase {
         // Apply all model changes on the EDT to avoid Swing threading violations.
         final String fName = newName;
         final String fPkgName = newPkgName;
+        final String fKicadFootprint = newKicadFootprint;
         final Length fHeight = newHeight;
         final Double fBodyWidth = newBodyWidth;
         final Double fBodyLength = newBodyLength;
-        final String fKicadFootprint = newKicadFootprint;
+        final boolean fHasPartDbFootprint = hasPartDbFootprint;
         final boolean skipFootprint = isUpdate ? disableFootprintOnUpdate : disableFootprintOnImport;
+
         Runnable applyChanges = () -> {
             if (fName != null) {
                 part.setName(fName);
@@ -841,14 +894,16 @@ public class PartDbDatabase extends AbstractPartDatabase {
                     Logger.info("PartDB: created package '{}'", fPkgName);
                 }
                 part.setPackage(existing);
-                if (autoApplyKicadPads) {
-                    importKicadPads(existing, fKicadFootprint);
-                }
                 if (fBodyWidth != null) {
                     existing.getFootprint().setBodyWidth(fBodyWidth);
                 }
                 if (fBodyLength != null) {
                     existing.getFootprint().setBodyHeight(fBodyLength);
+                }
+                if (fKicadFootprint != null
+                        && (!fHasPartDbFootprint || autoApplyKicadPads
+                                || fBodyWidth != null || fBodyLength != null)) {
+                    importKicadPads(existing, fKicadFootprint);
                 }
             }
             if (fHeight != null) {
@@ -1029,11 +1084,13 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
         builder.method(method, publisher);
 
+        long t0 = System.currentTimeMillis();
         HttpResponse<String> response = httpClient.send(builder.build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        long ms = System.currentTimeMillis() - t0;
 
         int status = response.statusCode();
-        Logger.trace("PartDB {} {} -> {}", method, fullUrl, status);
+        Logger.trace("PartDB {} {} -> {} ({}ms)", method, fullUrl, status, ms);
 
         if (status < 200 || status >= 300) {
             throw new IOException("PartDB HTTP " + status + " for " + method + " " + fullUrl
