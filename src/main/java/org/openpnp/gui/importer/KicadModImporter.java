@@ -30,7 +30,11 @@ import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
 import org.openpnp.Translations;
+import org.openpnp.gui.KicadHttpLibraryDialog;
 import org.openpnp.gui.MainFrame;
+import org.openpnp.machine.reference.KicadLibrary;
+import org.openpnp.machine.reference.ReferenceMachine;
+import org.openpnp.model.Configuration;
 import org.openpnp.model.Footprint;
 import org.openpnp.model.Footprint.Pad;
 
@@ -151,24 +155,49 @@ public class KicadModImporter {
         }
     }
 
-    /** Opens a file chooser dialog to select a .kicad_mod file. */
+    /** Opens a footprint selection dialog. Uses the PartDB KiCad HTTP Library browser if configured,
+     *  falling back to a plain file chooser otherwise. */
     public KicadModImporter() throws Exception {
         try {
-            FileDialog fileDialog = new FileDialog(MainFrame.get());
-            fileDialog.setFilenameFilter(new FilenameFilter() {
-                @Override
-                public boolean accept(File dir, String name) {
-                    return name.toLowerCase().endsWith(".kicad_mod"); //$NON-NLS-1$
+            KicadLibrary kl = findKicadLibrary();
+            if (kl != null && kl.isConfigured()) {
+                KicadHttpLibraryDialog dlg = new KicadHttpLibraryDialog(MainFrame.get(), kl);
+                dlg.setVisible(true);
+                if (dlg.getSelectedRef() != null) {
+                    for (Pad p : kl.resolveKicadFootprintPads(dlg.getSelectedRef())) {
+                        footprint.addPad(p);
+                    }
+                } else if (dlg.getSelectedFile() != null) {
+                    parseContent(new BufferedReader(new FileReader(dlg.getSelectedFile())));
                 }
-            });
-            fileDialog.setVisible(true);
-            if (fileDialog.getFile() == null) {
-                return;
+                // cancelled: leave pads empty
+            } else {
+                FileDialog fileDialog = new FileDialog(MainFrame.get());
+                fileDialog.setFilenameFilter(new FilenameFilter() {
+                    @Override
+                    public boolean accept(File dir, String name) {
+                        return name.toLowerCase().endsWith(".kicad_mod"); //$NON-NLS-1$
+                    }
+                });
+                fileDialog.setVisible(true);
+                if (fileDialog.getFile() == null) {
+                    return;
+                }
+                parseContent(new BufferedReader(new FileReader(
+                        new File(new File(fileDialog.getDirectory()), fileDialog.getFile()))));
             }
-            parseContent(new BufferedReader(new FileReader(new File(new File(fileDialog.getDirectory()), fileDialog.getFile()))));
         }
         catch (Exception e) {
             throw new Exception(Translations.getString("KicadModImporter.LoadFile.Fail") + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    private static KicadLibrary findKicadLibrary() {
+        try {
+            return ((ReferenceMachine) Configuration.get().getMachine()).getKicadLibrary();
+        }
+        catch (Exception e) {
+            return null;
         }
     }
 
