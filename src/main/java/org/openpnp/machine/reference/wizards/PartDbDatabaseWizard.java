@@ -11,11 +11,8 @@ import javax.swing.SwingUtilities;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
-import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.border.TitledBorder;
 
@@ -45,7 +42,6 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
     private JCheckBox disableFootprintOnImportCheckbox;
     private JCheckBox disableFootprintOnUpdateCheckbox;
     private JCheckBox allowExternalAttachmentsCheckbox;
-    private JTextArea kicadLibraryPathField;
 
     public PartDbDatabaseWizard(PartDbDatabase db) {
         this.db = db;
@@ -193,38 +189,6 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
         allowExternalAttachmentsCheckbox = new JCheckBox("Allow external attachment URLs (images, datasheets)");
         importPanel.add(allowExternalAttachmentsCheckbox, "4, 8");
 
-        // --- KiCad Libraries section ---
-        JPanel kicadPanel = new JPanel() {
-            @Override
-            public Dimension getMaximumSize() {
-                return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
-            }
-        };
-        kicadPanel.setBorder(new TitledBorder(null, "KiCad Libraries", TitledBorder.LEADING,
-                TitledBorder.TOP, null, null));
-        contentPanel.add(kicadPanel);
-        kicadPanel.setLayout(new FormLayout(
-                new ColumnSpec[] {
-                        FormSpecs.RELATED_GAP_COLSPEC,
-                        FormSpecs.DEFAULT_COLSPEC,
-                        FormSpecs.RELATED_GAP_COLSPEC,
-                        ColumnSpec.decode("default:grow"),
-                },
-                new RowSpec[] {
-                        FormSpecs.RELATED_GAP_ROWSPEC,
-                        FormSpecs.DEFAULT_ROWSPEC,
-                }));
-
-        JLabel kicadLibLabel = new JLabel("<html>Library Paths<br><small>(local or HTTP)</small></html>");
-        kicadLibLabel.setToolTipText("<html>One path or URL per line.<br>"
-                + "Local: <tt>/usr/share/kicad/footprints</tt><br>"
-                + "HTTP:&nbsp;&nbsp;<tt>https://raw.githubusercontent.com/KiCad/KiCad-Footprints/master</tt><br>"
-                + "URL resolves to: <tt>{base}/{Library}.pretty/{Footprint}.kicad_mod</tt></html>");
-        kicadPanel.add(kicadLibLabel, "2, 2, right, top");
-        kicadLibraryPathField = new JTextArea(4, 0);
-        kicadLibraryPathField.setLineWrap(false);
-        kicadPanel.add(new JScrollPane(kicadLibraryPathField), "4, 2");
-
         contentPanel.add(Box.createVerticalGlue());
 
         // Reflect current connection state immediately.
@@ -264,6 +228,5 @@ public class PartDbDatabaseWizard extends AbstractConfigurationWizard {
         addWrappedBinding(db, "disableFootprintOnImport", disableFootprintOnImportCheckbox, "selected");
         addWrappedBinding(db, "disableFootprintOnUpdate", disableFootprintOnUpdateCheckbox, "selected");
         addWrappedBinding(db, "allowExternalAttachments", allowExternalAttachmentsCheckbox, "selected");
-        addWrappedBinding(db, "kicadLibraryPath", kicadLibraryPathField, "text");
     }
 }
