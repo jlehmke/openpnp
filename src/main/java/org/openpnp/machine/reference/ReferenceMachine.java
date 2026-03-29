@@ -145,6 +145,9 @@ public class ReferenceMachine extends AbstractMachine {
     protected PartDatabase partDatabase = new PartDbDatabase();
 
     @Element(required = false)
+    private KicadLibrary kicadLibrary = new KicadLibrary();
+
+    @Element(required = false)
     private boolean homeAfterEnabled = false;
 
     @Element(required = false)
@@ -313,6 +316,10 @@ public class ReferenceMachine extends AbstractMachine {
         firePropertyChange("partDatabase", oldValue, partDatabase);
     }
 
+    public KicadLibrary getKicadLibrary() {
+        return kicadLibrary;
+    }
+
     @Override
     public boolean isAutoToolSelect() {
         return autoToolSelect;
@@ -405,7 +412,7 @@ public class ReferenceMachine extends AbstractMachine {
         children.add(new SimplePropertySheetHolder(Translations.getString(
                 "ReferenceMachine.PropertySheetHolder.JobProcessors.title"), Arrays.asList(getPnpJobProcessor()))); //$NON-NLS-1$
         children.add(new SimplePropertySheetHolder("Integrations",
-                Arrays.asList(partDatabase)));
+                Arrays.asList(partDatabase, kicadLibrary)));
 
         List<PropertySheetHolder> vision = new ArrayList<>();
         for (PartAlignment alignment : getPartAlignments()) {

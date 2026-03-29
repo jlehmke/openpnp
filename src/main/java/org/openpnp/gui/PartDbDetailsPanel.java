@@ -6,13 +6,16 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.Desktop;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Image;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.net.URI;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 import javax.imageio.ImageIO;
@@ -36,10 +39,15 @@ import javax.swing.border.TitledBorder;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 
+import org.openpnp.gui.importer.KicadModImporter;
 import org.openpnp.gui.support.Icons;
+import org.openpnp.machine.reference.KicadLibrary;
 import org.openpnp.machine.reference.PartDbDatabase;
 import org.openpnp.machine.reference.PartDbDatabase.PartDbLot;
 import org.openpnp.machine.reference.PartDbDatabase.PartDbRawData;
+import org.openpnp.machine.reference.ReferenceMachine;
+import org.openpnp.model.Configuration;
+import org.openpnp.model.Footprint;
 import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Part;
@@ -80,7 +88,9 @@ public class PartDbDetailsPanel extends JPanel {
     private final JTextField descLabel;
     private final JTextField kicadFootprintField;
     private final JButton applyPadsBtn;
+    private final JButton selectKicadFpBtn;
     private PartDbRawData rawData;
+    private String currentKicadRef;
     private BufferedImage imgOriginal;
     private boolean loaded;
 
@@ -209,11 +219,19 @@ public class PartDbDetailsPanel extends JPanel {
         applyPadsBtn.setToolTipText("Import pad geometry from the KiCad library into the current package");
         applyPadsBtn.addActionListener(e -> applyKicadPads());
 
+        selectKicadFpBtn = new JButton("Select\u2026");
+        selectKicadFpBtn.setToolTipText("Browse the PartDB KiCad HTTP Library to select a footprint and apply its pads");
+        selectKicadFpBtn.addActionListener(e -> selectKicadFootprint());
+
+        JPanel kicadBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        kicadBtns.add(applyPadsBtn);
+        kicadBtns.add(selectKicadFpBtn);
+
         JPanel kicadRow = new JPanel(new BorderLayout(4, 0));
         kicadRow.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
         kicadRow.add(new JLabel("KiCad Footprint:"), BorderLayout.WEST);
         kicadRow.add(kicadFootprintField, BorderLayout.CENTER);
-        kicadRow.add(applyPadsBtn, BorderLayout.EAST);
+        kicadRow.add(kicadBtns, BorderLayout.EAST);
 
         JPanel paramsTable = new JPanel(new BorderLayout());
         paramsTable.add(table.getTableHeader(), BorderLayout.NORTH);
@@ -357,6 +375,7 @@ public class PartDbDetailsPanel extends JPanel {
                     removeStockBtn.setEnabled(hasLots);
                     String kicad = rawData.kicadFromPart != null ? rawData.kicadFromPart
                             : rawData.kicadFromFp;
+                    currentKicadRef = kicad;
                     kicadFootprintField.setText(kicad != null ? kicad : "");
                     applyPadsBtn.setEnabled(kicad != null && !kicad.isEmpty()
                             && part.getPackage() != null);
@@ -459,6 +478,15 @@ public class PartDbDetailsPanel extends JPanel {
         }
     }
 
+    private KicadLibrary getKicadLibrary() {
+        try {
+            return ((ReferenceMachine) Configuration.get().getMachine()).getKicadLibrary();
+        }
+        catch (Exception e) {
+            return null;
+        }
+    }
+
     private void applyKicadPads() {
         if (rawData == null || part.getPackage() == null) {
             return;
@@ -478,14 +506,58 @@ public class PartDbDetailsPanel extends JPanel {
         if (choice != JOptionPane.OK_OPTION) {
             return;
         }
-        boolean ok = db.importKicadPads(part.getPackage(), kicad);
+        KicadLibrary kl = getKicadLibrary();
+        boolean ok = kl != null && kl.importKicadPads(part.getPackage(), kicad);
         if (ok) {
             statusLabel.setText("KiCad pads applied.");
-        } else if (db.getKicadLibraryPath() == null || db.getKicadLibraryPath().isEmpty()) {
-            statusLabel.setText("KiCad library path not configured (see Machine \u2192 Part Database settings).");
+        } else if (kl == null || !kl.isConfigured()) {
+            statusLabel.setText("KiCad library path not configured (see Machine \u2192 KiCad Libraries).");
         } else {
             statusLabel.setText("Footprint '" + kicad + "' not found in configured library path.");
         }
+    }
+
+    private void selectKicadFootprint() {
+        if (part.getPackage() == null) {
+            statusLabel.setText("No package assigned to this part.");
+            return;
+        }
+        KicadLibrary kl = getKicadLibrary();
+        if (kl == null || !kl.isConfigured()) {
+            statusLabel.setText("KiCad library path not configured (see Machine \u2192 KiCad Libraries).");
+            return;
+        }
+        KicadHttpLibraryDialog dlg = new KicadHttpLibraryDialog(MainFrame.get(), kl);
+        dlg.setVisible(true);
+
+        if (dlg.getSelectedRef() != null) {
+            String ref = dlg.getSelectedRef();
+            boolean ok = kl.importKicadPads(part.getPackage(), ref);
+            if (ok) {
+                currentKicadRef = ref;
+                kicadFootprintField.setText(ref);
+                applyPadsBtn.setEnabled(true);
+                db.setPendingKicadFootprint(part.getId(), ref);
+                statusLabel.setText("KiCad footprint selected and pads applied.");
+            } else {
+                statusLabel.setText("Footprint '" + ref + "' not found in configured library path.");
+            }
+        } else if (dlg.getSelectedFile() != null) {
+            try {
+                File f = dlg.getSelectedFile();
+                List<Footprint.Pad> pads = new KicadModImporter(f).getPads();
+                Footprint fp = part.getPackage().getFootprint();
+                fp.getPads().clear();
+                for (Footprint.Pad pad : pads) {
+                    fp.addPad(pad);
+                }
+                statusLabel.setText("Pads applied from file (footprint ref not updated in PartDB).");
+            } catch (Exception ex) {
+                statusLabel.setText("Failed to import pads from file: " + ex.getMessage());
+                Logger.warn("PartDB: failed to import pads from file: {}", ex.getMessage());
+            }
+        }
+        // cancelled: do nothing
     }
 
     private void rescaleImage() {

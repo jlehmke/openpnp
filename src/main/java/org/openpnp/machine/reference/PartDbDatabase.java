@@ -1,6 +1,5 @@
 package org.openpnp.machine.reference;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
@@ -22,7 +21,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.openpnp.gui.importer.KicadModImporter;
 import org.openpnp.gui.support.Wizard;
 import org.openpnp.machine.reference.wizards.PartDbDatabaseWizard;
 import org.openpnp.model.Footprint;
@@ -137,24 +135,6 @@ public class PartDbDatabase extends AbstractPartDatabase {
     @Attribute(name = "showStockLevel", required = false)
     private boolean showStockLevelLegacy = false;
 
-    /** Absorbs the old XML attribute so strict-mode deserialisation does not fail on existing configs. */
-    @Attribute(name = "kicadLibraryPath", required = false)
-    private String kicadLibraryPathAttr = null;
-
-    /** Library paths, one per line.  Stored as XML element so newlines survive the round-trip. */
-    @Element(required = false)
-    private String kicadLibraryPath = "";
-
-    public String getKicadLibraryPath() {
-        return kicadLibraryPath;
-    }
-
-    public void setKicadLibraryPath(String path) {
-        Object old = this.kicadLibraryPath;
-        this.kicadLibraryPath = path;
-        firePropertyChange("kicadLibraryPath", old, path);
-    }
-
     /** Legacy absorber for old adjustStockOnJobFinish attribute. */
     @Attribute(name = "adjustStockOnJobFinish", required = false)
     private boolean adjustStockOnJobFinishLegacy = false;
@@ -204,11 +184,11 @@ public class PartDbDatabase extends AbstractPartDatabase {
     /** In-RAM cache: OpenPnP part name → PartDB numeric ID. Never persisted. */
     private final transient Map<String, Integer> partIdCache = new ConcurrentHashMap<>();
 
-    /** In-RAM cache for fetched .kicad_mod content: URL → text. Never persisted. */
-    private final transient Map<String, String> kicadUrlCache = new ConcurrentHashMap<>();
-
     /** Pending placement counts not yet flushed to PartDB: partId → count. */
     private final transient Map<String, Integer> pendingPlacements = new ConcurrentHashMap<>();
+
+    /** KiCad footprint refs selected by the user, to be written to eda_info on next push. */
+    private final transient Map<String, String> pendingKicadFootprints = new ConcurrentHashMap<>();
 
     /** Returns the cached stock level for a part, or null if not yet fetched. */
     public Integer getStockLevel(String partId) {
@@ -263,13 +243,6 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
     @Commit
     private void onLoad() {
-        // Migrate from old @Attribute storage (newlines were lost to XML normalisation).
-        if ((kicadLibraryPath == null || kicadLibraryPath.isEmpty())
-                && kicadLibraryPathAttr != null && !kicadLibraryPathAttr.isEmpty()) {
-            kicadLibraryPath = kicadLibraryPathAttr.trim();
-        }
-        kicadLibraryPathAttr = null;
-
         if (enabled && url != null && !url.isEmpty() && apiToken != null && !apiToken.isEmpty()) {
             Thread t = new Thread(() -> {
                 try {
@@ -309,7 +282,6 @@ public class PartDbDatabase extends AbstractPartDatabase {
     public void connect() throws Exception {
         connected = false;
         partIdCache.clear();
-        kicadUrlCache.clear();
         try {
             request("GET", "/api/tokens/current", null);
         } catch (Exception e) {
@@ -482,120 +454,22 @@ public class PartDbDatabase extends AbstractPartDatabase {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    /** Returns true if pads were successfully imported, false otherwise. */
-    public boolean importKicadPads(Package pkg, String kicadFootprint) {
-        if (kicadLibraryPath == null || kicadLibraryPath.isEmpty() || kicadFootprint == null) {
-            return false;
+    private KicadLibrary getKicadLibrary() {
+        try {
+            return ((ReferenceMachine) Configuration.get().getMachine()).getKicadLibrary();
         }
-        if (!kicadFootprint.contains(":")) {
-            Logger.debug("PartDB: kicad_footprint '{}' has no library prefix, skipping pad import", kicadFootprint);
-            return false;
-        }
-        String[] parts = kicadFootprint.split(":", 2);
-        String libName = parts[0];
-        String fpName  = parts[1];
-        for (String base : kicadLibraryPath.split("[\\r\\n]+")) {
-            base = base.trim();
-            if (base.isEmpty()) {
-                continue;
-            }
-
-            // ── HTTP base URL ─────────────────────────────────────────────────
-            if (base.startsWith("http://") || base.startsWith("https://")) {
-                String normalizedBase = base.replaceAll("/+$", "");
-                String fileUrl;
-                if (normalizedBase.endsWith(".pretty")) {
-                    String dirLib = normalizedBase.substring(normalizedBase.lastIndexOf('/') + 1)
-                                                  .replace(".pretty", "");
-                    if (!dirLib.equals(libName)) {
-                        continue;
-                    }
-                    fileUrl = normalizedBase + "/" + fpName + ".kicad_mod";
-                } else {
-                    fileUrl = normalizedBase + "/" + libName + ".pretty/" + fpName + ".kicad_mod";
-                }
-                try {
-                    String content = fetchKicadUrl(fileUrl);
-                    if (content == null) {
-                        continue; // 404 — try next base URL
-                    }
-                    List<Footprint.Pad> pads = new KicadModImporter(content).getPads();
-                    Footprint fp = pkg.getFootprint();
-                    fp.getPads().clear();
-                    for (Footprint.Pad pad : pads) {
-                        fp.addPad(pad);
-                    }
-                    Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), fileUrl);
-                    return true;
-                } catch (Exception e) {
-                    Logger.warn("PartDB: could not import KiCad pads from '{}': {}", fileUrl, e.getMessage());
-                    return false;
-                }
-            }
-
-            // ── Filesystem path ───────────────────────────────────────────────
-            File kicadFile;
-            if (base.endsWith(".pretty")) {
-                // Each line points directly at a .pretty library directory.
-                // Only search here if the directory name matches the library.
-                String dirLib = new File(base).getName().replace(".pretty", "");
-                if (!dirLib.equals(libName)) {
-                    continue;
-                }
-                kicadFile = new File(base, fpName + ".kicad_mod");
-            } else {
-                // Each line is the parent directory containing .pretty subdirectories.
-                kicadFile = new File(base, libName + ".pretty/" + fpName + ".kicad_mod");
-            }
-            if (!kicadFile.exists()) {
-                continue;
-            }
-            try {
-                List<Footprint.Pad> pads = new KicadModImporter(kicadFile).getPads();
-                Footprint fp = pkg.getFootprint();
-                fp.getPads().clear();
-                for (Footprint.Pad pad : pads) {
-                    fp.addPad(pad);
-                }
-                Logger.info("PartDB: imported {} pad(s) from '{}'", pads.size(), kicadFile.getName());
-                return true;
-            } catch (Exception e) {
-                Logger.warn("PartDB: could not import KiCad pads from '{}': {}", kicadFile, e.getMessage());
-                return false;
-            }
-        }
-        Logger.debug("PartDB: kicad_footprint '{}' not found in any library path", kicadFootprint);
-        return false;
-    }
-
-    /**
-     * Fetches text content of a .kicad_mod file from an HTTP URL.
-     * Returns null on 404 (caller should try the next base URL).
-     * Results are cached in kicadUrlCache for the session.
-     */
-    private String fetchKicadUrl(String url) throws Exception {
-        String cached = kicadUrlCache.get(url);
-        if (cached != null) {
-            Logger.debug("PartDB KiCad cache hit: {}", url);
-            return cached;
-        }
-        Logger.debug("PartDB KiCad fetching: {}", url);
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(10))
-                .GET()
-                .build();
-        HttpResponse<String> resp = httpClient.send(req,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        if (resp.statusCode() == 404) {
+        catch (Exception e) {
             return null;
         }
-        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-            throw new IOException("HTTP " + resp.statusCode() + " fetching " + url);
+    }
+
+    /** Returns true if pads were successfully imported, false otherwise. */
+    public boolean importKicadPads(Package pkg, String kicadFootprint) {
+        KicadLibrary kl = getKicadLibrary();
+        if (kl == null) {
+            return false;
         }
-        String content = resp.body();
-        kicadUrlCache.put(url, content);
-        return content;
+        return kl.importKicadPads(pkg, kicadFootprint);
     }
 
     private JsonObject findPartByName(String name) throws Exception {
@@ -613,7 +487,12 @@ public class PartDbDatabase extends AbstractPartDatabase {
         return part;
     }
 
-/** A single stock lot from PartDB. */
+    /** Records a KiCad footprint reference to be pushed to PartDB eda_info on the next pushPart call. */
+    public void setPendingKicadFootprint(String partId, String ref) {
+        pendingKicadFootprints.put(partId, ref);
+    }
+
+    /** A single stock lot from PartDB. */
     public static class PartDbLot {
         public final int id;
         public final String description;
@@ -1103,6 +982,10 @@ public class PartDbDatabase extends AbstractPartDatabase {
                 Logger.debug("PartDB: could not resolve footprint for package '{}': {}",
                         part.getPackage().getId(), e.getMessage());
             }
+        }
+        String pendingKicadRef = pendingKicadFootprints.remove(part.getId());
+        if (pendingKicadRef != null) {
+            sb.append(", \"eda_info\": {\"kicad_footprint\": ").append(jsonString(pendingKicadRef)).append("}");
         }
         sb.append("}");
         return sb.toString();
