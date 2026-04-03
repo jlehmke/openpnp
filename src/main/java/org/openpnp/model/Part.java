@@ -48,7 +48,7 @@ public class Part extends AbstractPartSettingsHolder {
 
     private Package packag;
 
-    @Attribute
+    @Attribute(required = false)
     private String packageId;
 
     @Attribute(required = false)

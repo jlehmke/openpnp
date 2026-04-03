@@ -39,6 +39,7 @@ import javax.swing.border.TitledBorder;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 
+import org.openpnp.Translations;
 import org.openpnp.gui.importer.KicadModImporter;
 import org.openpnp.gui.support.Icons;
 import org.openpnp.machine.reference.KicadLibrary;
@@ -214,12 +215,12 @@ public class PartDbDetailsPanel extends JPanel {
         table.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
         kicadFootprintField = new JTextField();
         kicadFootprintField.setEditable(false);
-        applyPadsBtn = new JButton("Apply Pads");
+        applyPadsBtn = new JButton(Translations.getString("PartDbDetailsPanel.applyPadsButton.text"));
         applyPadsBtn.setEnabled(false);
         applyPadsBtn.setToolTipText("Import pad geometry from the KiCad library into the current package");
         applyPadsBtn.addActionListener(e -> applyKicadPads());
 
-        selectKicadFpBtn = new JButton("Select\u2026");
+        selectKicadFpBtn = new JButton(Translations.getString("PartDbDetailsPanel.selectFootprintButton.text"));
         selectKicadFpBtn.setToolTipText("Browse the PartDB KiCad HTTP Library to select a footprint and apply its pads");
         selectKicadFpBtn.addActionListener(e -> selectKicadFootprint());
 
@@ -229,7 +230,7 @@ public class PartDbDetailsPanel extends JPanel {
 
         JPanel kicadRow = new JPanel(new BorderLayout(4, 0));
         kicadRow.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
-        kicadRow.add(new JLabel("KiCad Footprint:"), BorderLayout.WEST);
+        kicadRow.add(new JLabel(Translations.getString("PartDbDetailsPanel.kicadFootprintLabel.text")), BorderLayout.WEST);
         kicadRow.add(kicadFootprintField, BorderLayout.CENTER);
         kicadRow.add(kicadBtns, BorderLayout.EAST);
 
@@ -238,7 +239,7 @@ public class PartDbDetailsPanel extends JPanel {
         paramsTable.add(table, BorderLayout.CENTER);
 
         JPanel paramsPanel = new JPanel(new BorderLayout());
-        paramsPanel.setBorder(new TitledBorder("Parameters"));
+        paramsPanel.setBorder(new TitledBorder(Translations.getString("PartDbDetailsPanel.parametersPanel.border")));
         paramsPanel.add(paramsTable, BorderLayout.CENTER);
         paramsPanel.add(kicadRow, BorderLayout.SOUTH);
 
@@ -270,7 +271,7 @@ public class PartDbDetailsPanel extends JPanel {
         JPanel adjustPanel = new JPanel(new BorderLayout(4, 0));
         adjustPanel.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
         JPanel adjustRight = new JPanel();
-        adjustRight.add(new JLabel("Change stock level:"));
+        adjustRight.add(new JLabel(Translations.getString("PartDbDetailsPanel.changeStockLabel.text")));
         adjustRight.add(qtySpinner);
         adjustRight.add(addStockBtn);
         adjustRight.add(removeStockBtn);
@@ -281,7 +282,7 @@ public class PartDbDetailsPanel extends JPanel {
         lotsTable.add(this.lotsTable, BorderLayout.CENTER);
 
         JPanel lotsPanel = new JPanel(new BorderLayout());
-        lotsPanel.setBorder(new TitledBorder("Stock Lots"));
+        lotsPanel.setBorder(new TitledBorder(Translations.getString("PartDbDetailsPanel.stockLotsPanel.border")));
         lotsPanel.add(lotsTable, BorderLayout.CENTER);
         lotsPanel.add(adjustPanel, BorderLayout.SOUTH);
 
@@ -291,14 +292,14 @@ public class PartDbDetailsPanel extends JPanel {
 
         // --- Bottom bar ---
         statusLabel = new JLabel(" ");
-        JButton refreshBtn = new JButton("Refresh");
+        JButton refreshBtn = new JButton(Translations.getString("PartDbDetailsPanel.refreshButton.text"));
         refreshBtn.addActionListener(e -> load());
 
-        datasheetBtn = new JButton("Datasheet");
+        datasheetBtn = new JButton(Translations.getString("PartDbDetailsPanel.datasheetButton.text"));
         datasheetBtn.setEnabled(false);
         datasheetBtn.addActionListener(e -> openDatasheet());
 
-        viewInDbBtn = new JButton("View in DB");
+        viewInDbBtn = new JButton(Translations.getString("PartDbDetailsPanel.viewInDbButton.text"));
         viewInDbBtn.setEnabled(false);
         viewInDbBtn.addActionListener(e -> openInDb());
 
@@ -329,10 +330,10 @@ public class PartDbDetailsPanel extends JPanel {
 
     private void load() {
         if (!db.isConnected()) {
-            statusLabel.setText("Not connected to database.");
+            statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.notConnected"));
             return;
         }
-        statusLabel.setText("Loading\u2026");
+        statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.loading"));
         rawData = null;
         datasheetBtn.setEnabled(false);
         viewInDbBtn.setEnabled(false);
@@ -379,11 +380,11 @@ public class PartDbDetailsPanel extends JPanel {
                     kicadFootprintField.setText(kicad != null ? kicad : "");
                     applyPadsBtn.setEnabled(kicad != null && !kicad.isEmpty()
                             && part.getPackage() != null);
-                    statusLabel.setText("Loaded from database.");
+                    statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.loaded"));
                 } catch (InterruptedException | ExecutionException e) {
                     datasheetBtn.setEnabled(false);
                     viewInDbBtn.setEnabled(false);
-                    statusLabel.setText("Not found in database.");
+                    statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.notFound"));
                     Logger.debug("PartDB details: {}", e.getMessage());
                 }
             }
@@ -401,7 +402,7 @@ public class PartDbDetailsPanel extends JPanel {
         int delta = sign * (Integer) qtySpinner.getValue();
         addStockBtn.setEnabled(false);
         removeStockBtn.setEnabled(false);
-        statusLabel.setText("Updating stock\u2026");
+        statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.updatingStock"));
 
         new SwingWorker<Integer, Void>() {
             @Override
@@ -421,9 +422,9 @@ public class PartDbDetailsPanel extends JPanel {
                         }
                     }
                     lotsTableModel.fireTableDataChanged();
-                    statusLabel.setText("Stock updated.");
+                    statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.stockUpdated"));
                 } catch (Exception e) {
-                    statusLabel.setText("Update failed: " + e.getCause().getMessage());
+                    statusLabel.setText(String.format(Translations.getString("PartDbDetailsPanel.status.updateFailed"), e.getCause().getMessage()));
                     Logger.warn("PartDB: stock update failed: {}", e.getMessage());
                 } finally {
                     addStockBtn.setEnabled(true);
@@ -500,7 +501,7 @@ public class PartDbDetailsPanel extends JPanel {
                         + part.getPackage().getId() + "</b>.<br>"
                         + "It is not recommended to overwrite a footprint that was set manually.<br><br>"
                         + "Continue?</html>",
-                "Apply KiCad Pads",
+                Translations.getString("PartDbDetailsPanel.applyPadsDialog.title"),
                 JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.WARNING_MESSAGE);
         if (choice != JOptionPane.OK_OPTION) {
@@ -509,55 +510,87 @@ public class PartDbDetailsPanel extends JPanel {
         KicadLibrary kl = getKicadLibrary();
         boolean ok = kl != null && kl.importKicadPads(part.getPackage(), kicad);
         if (ok) {
-            statusLabel.setText("KiCad pads applied.");
+            statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.padsApplied"));
         } else if (kl == null || !kl.isConfigured()) {
-            statusLabel.setText("KiCad library path not configured (see Machine \u2192 KiCad Libraries).");
+            statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.libraryNotConfigured"));
         } else {
-            statusLabel.setText("Footprint '" + kicad + "' not found in configured library path.");
+            statusLabel.setText(String.format(Translations.getString("PartDbDetailsPanel.status.footprintNotFound"), kicad));
         }
     }
 
     private void selectKicadFootprint() {
-        if (part.getPackage() == null) {
-            statusLabel.setText("No package assigned to this part.");
-            return;
-        }
         KicadLibrary kl = getKicadLibrary();
-        if (kl == null || !kl.isConfigured()) {
-            statusLabel.setText("KiCad library path not configured (see Machine \u2192 KiCad Libraries).");
-            return;
-        }
         KicadHttpLibraryDialog dlg = new KicadHttpLibraryDialog(MainFrame.get(), kl);
         dlg.setVisible(true);
 
         if (dlg.getSelectedRef() != null) {
             String ref = dlg.getSelectedRef();
-            boolean ok = kl.importKicadPads(part.getPackage(), ref);
+            if (kl == null || !kl.isConfigured()) {
+                statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.libraryNotConfigured"));
+                return;
+            }
+            org.openpnp.model.Package pkg = ensurePackage(ref);
+            if (pkg == null) {
+                return;
+            }
+            boolean ok = kl.importKicadPads(pkg, ref);
             if (ok) {
                 currentKicadRef = ref;
                 kicadFootprintField.setText(ref);
                 applyPadsBtn.setEnabled(true);
                 db.setPendingKicadFootprint(part.getId(), ref);
-                statusLabel.setText("KiCad footprint selected and pads applied.");
+                statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.footprintSelected"));
             } else {
-                statusLabel.setText("Footprint '" + ref + "' not found in configured library path.");
+                statusLabel.setText(String.format(Translations.getString("PartDbDetailsPanel.status.footprintNotFound"), ref));
             }
         } else if (dlg.getSelectedFile() != null) {
             try {
                 File f = dlg.getSelectedFile();
+                String nameHint = f.getName();
+                if (nameHint.toLowerCase().endsWith(".kicad_mod")) {
+                    nameHint = nameHint.substring(0, nameHint.length() - ".kicad_mod".length());
+                }
+                org.openpnp.model.Package pkg = ensurePackage(nameHint);
+                if (pkg == null) {
+                    return;
+                }
                 List<Footprint.Pad> pads = new KicadModImporter(f).getPads();
-                Footprint fp = part.getPackage().getFootprint();
+                Footprint fp = pkg.getFootprint();
                 fp.getPads().clear();
                 for (Footprint.Pad pad : pads) {
                     fp.addPad(pad);
                 }
-                statusLabel.setText("Pads applied from file (footprint ref not updated in PartDB).");
+                statusLabel.setText(Translations.getString("PartDbDetailsPanel.status.padsFromFile"));
             } catch (Exception ex) {
-                statusLabel.setText("Failed to import pads from file: " + ex.getMessage());
+                statusLabel.setText(String.format(Translations.getString("PartDbDetailsPanel.status.padsFromFileFailed"), ex.getMessage()));
                 Logger.warn("PartDB: failed to import pads from file: {}", ex.getMessage());
             }
         }
         // cancelled: do nothing
+    }
+
+    /**
+     * Returns the part's current package, or creates and assigns a new one derived from the given
+     * footprint name hint (e.g. "Resistors:R_0603" → package id "R_0603").
+     */
+    private org.openpnp.model.Package ensurePackage(String nameHint) {
+        if (part.getPackage() != null) {
+            return part.getPackage();
+        }
+        // Derive package ID: use the portion after the last ':' if present
+        String pkgId = nameHint.contains(":")
+                ? nameHint.substring(nameHint.lastIndexOf(':') + 1)
+                : nameHint;
+        // Fall back to existing package with same ID if already registered
+        org.openpnp.model.Package existing = Configuration.get().getPackage(pkgId);
+        if (existing != null) {
+            part.setPackage(existing);
+            return existing;
+        }
+        org.openpnp.model.Package pkg = new org.openpnp.model.Package(pkgId);
+        Configuration.get().addPackage(pkg);
+        part.setPackage(pkg);
+        return pkg;
     }
 
     private void rescaleImage() {

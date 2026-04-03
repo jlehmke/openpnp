@@ -20,6 +20,9 @@
 package org.openpnp.gui;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.FileDialog;
 import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
@@ -31,6 +34,7 @@ import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.prefs.Preferences;
@@ -41,18 +45,24 @@ import javax.swing.JButton;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JToolBar;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
+import javax.swing.UIManager;
 import javax.swing.border.TitledBorder;
+import javax.swing.table.TableCellRenderer;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
 import javax.swing.table.TableRowSorter;
+
+import javax.swing.JOptionPane;
 
 import org.openpnp.Translations;
 import org.openpnp.events.PlacementsHolderLocationSelectedEvent;
@@ -60,18 +70,27 @@ import org.openpnp.events.PlacementsHolderSelectedEvent;
 import org.openpnp.events.PlacementSelectedEvent;
 import org.openpnp.gui.components.AutoSelectTextTable;
 import org.openpnp.gui.support.ActionGroup;
-import org.openpnp.gui.support.MonospacedFontTableCellRenderer;
-import org.openpnp.gui.support.MultisortTableHeaderCellRenderer;
-import org.openpnp.gui.support.TableUtils;
 import org.openpnp.gui.support.Icons;
 import org.openpnp.gui.support.LengthCellValue;
 import org.openpnp.gui.support.MessageBoxes;
+import org.openpnp.gui.support.MonospacedFontTableCellRenderer;
+import org.openpnp.gui.support.MultisortTableHeaderCellRenderer;
+import org.openpnp.gui.support.TableUtils;
 import org.openpnp.gui.tablemodel.PlacementsHolderTableModel;
+import org.openpnp.model.Board;
+import org.openpnp.model.BoardLocation;
+import org.openpnp.model.Configuration;
+import org.openpnp.model.Configuration.TablesLinked;
+import org.openpnp.model.LengthUnit;
+import org.openpnp.model.Location;
 import org.openpnp.model.Panel;
 import org.openpnp.model.PanelLocation;
 import org.openpnp.model.Placement;
-import org.openpnp.model.Configuration.TablesLinked;
-import org.openpnp.model.Configuration;
+import org.openpnp.machine.reference.PartDbDatabase;
+import org.openpnp.model.ProjectFile;
+import org.openpnp.model.ProjectRecord;
+import org.openpnp.spi.Machine;
+import org.openpnp.spi.ProjectStorage;
 import com.google.common.eventbus.Subscribe;
 
 @SuppressWarnings("serial")
@@ -88,6 +107,8 @@ public class PanelsPanel extends JPanel {
 
     private ActionGroup singleSelectionActionGroup;
     private ActionGroup multiSelectionActionGroup;
+    private ActionGroup partDbSelectionActionGroup;
+    private JProgressBar importProgressBar;
 
     private Preferences prefs = Preferences.userNodeForPackage(PanelsPanel.class);
 
@@ -99,9 +120,12 @@ public class PanelsPanel extends JPanel {
         
         singleSelectionActionGroup = new ActionGroup(removePanelAction, copyPanelAction);
         singleSelectionActionGroup.setEnabled(false);
-        
+
         multiSelectionActionGroup = new ActionGroup(removePanelAction);
         multiSelectionActionGroup.setEnabled(false);
+
+        partDbSelectionActionGroup = new ActionGroup(pushPanelToPartDbAction, pullPanelFromPartDbAction);
+        partDbSelectionActionGroup.setEnabled(false);
         
         panelsTableModel = new PlacementsHolderTableModel(configuration, 
                 () -> configuration.getPanels(), Panel.class);
@@ -115,19 +139,35 @@ public class PanelsPanel extends JPanel {
         panelsTable = new AutoSelectTextTable(panelsTableModel) {
             @Override
             public String getToolTipText(MouseEvent e) {
-
                 java.awt.Point p = e.getPoint();
                 int row = rowAtPoint(p);
                 int col = columnAtPoint(p);
-
                 if (row >= 0) {
                     if (col == 0) {
                         row = panelsTable.convertRowIndexToModel(row);
                         return configuration.getPanels().get(row).getFile().toString();
                     }
                 }
-
                 return super.getToolTipText();
+            }
+
+            @Override
+            public Component prepareRenderer(TableCellRenderer renderer, int row, int column) {
+                Component c = super.prepareRenderer(renderer, row, column);
+                if (!isRowSelected(row)) {
+                    int modelRow = convertRowIndexToModel(row);
+                    List<Panel> panels = configuration.getPanels();
+                    if (modelRow < panels.size()) {
+                        Panel p = panels.get(modelRow);
+                        if (p.getPartDbProjectId() != null && p.isDirty()) {
+                            c.setBackground(new Color(255, 230, 80));
+                        } else {
+                            Color bg = UIManager.getColor("Table.alternateRowColor");
+                            c.setBackground((row % 2 == 0 || bg == null) ? getBackground() : bg);
+                        }
+                    }
+                }
+                return c;
             }
         };
 
@@ -164,6 +204,10 @@ public class PanelsPanel extends JPanel {
                                 && Configuration.get().getTablesLinked() == TablesLinked.Linked;
 
                         List<Panel> selections = getSelections();
+                        partDbSelectionActionGroup.setEnabled(
+                                selections.size() == 1
+                                && selections.get(0).getPartDbProjectId() != null
+                                && PartDbDatabase.getProjectStorage() != null);
                         if (selections.size() == 0) {
                             singleSelectionActionGroup.setEnabled(false);
                             multiSelectionActionGroup.setEnabled(false);
@@ -232,9 +276,21 @@ public class PanelsPanel extends JPanel {
                 TitledBorder.LEADING, TitledBorder.TOP, null)); //$NON-NLS-1$
         pnlPanels.setLayout(new BorderLayout(0, 0));
 
+        JPanel toolbarRow = new JPanel(new BorderLayout());
+
         JToolBar toolBarPanels = new JToolBar();
         toolBarPanels.setFloatable(false);
-        pnlPanels.add(toolBarPanels, BorderLayout.NORTH);
+        toolbarRow.add(toolBarPanels, BorderLayout.CENTER);
+
+        importProgressBar = new JProgressBar();
+        importProgressBar.setStringPainted(true);
+        importProgressBar.setPreferredSize(new Dimension(150, importProgressBar.getPreferredSize().height));
+        importProgressBar.setVisible(false);
+        JPanel progressPanel = new JPanel();
+        progressPanel.add(importProgressBar);
+        toolbarRow.add(progressPanel, BorderLayout.EAST);
+
+        pnlPanels.add(toolbarRow, BorderLayout.NORTH);
 
         JButton btnAddPanel = new JButton(addPanelAction);
         btnAddPanel.setHideActionText(true);
@@ -248,17 +304,31 @@ public class PanelsPanel extends JPanel {
             }
         });
         toolBarPanels.add(btnAddPanel);
-        
+
         JButton btnRemovePanel = new JButton(removePanelAction);
         btnRemovePanel.setHideActionText(true);
         toolBarPanels.add(btnRemovePanel);
-        
+
         JButton btnCopyPanel = new JButton(copyPanelAction);
         btnCopyPanel.setHideActionText(true);
         toolBarPanels.add(btnCopyPanel);
 
         toolBarPanels.addSeparator();
-        
+
+        JButton btnImportFromPartDb = new JButton(importPanelFromProjectAction);
+        btnImportFromPartDb.setHideActionText(true);
+        toolBarPanels.add(btnImportFromPartDb);
+
+        JButton btnPullFromPartDb = new JButton(pullPanelFromPartDbAction);
+        btnPullFromPartDb.setHideActionText(true);
+        toolBarPanels.add(btnPullFromPartDb);
+
+        JButton btnPushToPartDb = new JButton(pushPanelToPartDbAction);
+        btnPushToPartDb.setHideActionText(true);
+        toolBarPanels.add(btnPushToPartDb);
+
+        toolBarPanels.addSeparator();
+
         JButton btnCleanUp = new JButton(cleanUpAction);
         btnCleanUp.setHideActionText(true);
         toolBarPanels.add(btnCleanUp);
@@ -441,6 +511,329 @@ public class PanelsPanel extends JPanel {
                 MessageBoxes.errorBox(frame, 
                         Translations.getString("PanelsPanel.Action.AddPanel.ExistingPanel.ErrorMessage"), //$NON-NLS-1$
                         e.getMessage());
+            }
+        }
+    };
+
+    public final Action importPanelFromProjectAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbAdd);
+            putValue(NAME, Translations.getString("PanelsPanel.Action.ImportPanelFromPartDB.name"));
+            putValue(SHORT_DESCRIPTION,
+                    Translations.getString("PanelsPanel.Action.ImportPanelFromPartDB.description"));
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent arg0) {
+            ProjectStorage db = PartDbDatabase.getProjectStorage();
+            if (db == null || !db.isConnected()) {
+                JOptionPane.showMessageDialog(frame,
+                        Translations.getString("PartDb.Dialog.noProjectStorage.message"),
+                        Translations.getString("PartDb.Dialog.noProjectStorage.title"),
+                        JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            ProjectBoardImportDialog dlg = new ProjectBoardImportDialog(frame, db, true);
+            dlg.setVisible(true);
+
+            ProjectRecord project = dlg.getSelectedProject();
+            ProjectFile boardFileRecord = dlg.getSelectedFile();
+            if (project == null || boardFileRecord == null) {
+                return;
+            }
+
+            // Ask user where to save the panel file
+            FileDialog fileDialog = new FileDialog(frame, Translations.getString("PanelsPanel.Action.ImportPanelFromPartDB.saveDialogTitle"), FileDialog.SAVE);
+            fileDialog.setFilenameFilter((dir, name) -> name.toLowerCase().endsWith(".panel.xml"));
+            fileDialog.setFile(project.name.replaceAll("[^a-zA-Z0-9._-]", "_") + ".panel.xml");
+            fileDialog.setVisible(true);
+            if (fileDialog.getFile() == null) {
+                return;
+            }
+            String filename = fileDialog.getFile();
+            if (!filename.toLowerCase().endsWith(".panel.xml")) {
+                filename = filename + ".panel.xml";
+            }
+            final File panelFile = new File(fileDialog.getDirectory(), filename);
+
+            // Derive panel name
+            String fileStem = panelFile.getName();
+            if (fileStem.toLowerCase().endsWith(".panel.xml")) {
+                fileStem = fileStem.substring(0, fileStem.length() - ".panel.xml".length());
+            }
+            final String projectStem = project.name.replaceAll("[^a-zA-Z0-9._-]", "_");
+            final String panelName = (!fileStem.equals(projectStem)
+                    && !fileStem.equals(project.name))
+                    ? project.name + " [" + fileStem + "]"
+                    : project.name;
+
+            final boolean importMissingParts = dlg.isImportMissingParts();
+            final boolean isPanelXml =
+                    boardFileRecord.filename.toLowerCase().endsWith(".panel.xml");
+            final File panelDir = panelFile.getParentFile();
+
+            // Ask about board file conflicts on EDT before starting the worker
+            final boolean downloadBoardFiles;
+            if (isPanelXml) {
+                // All .board.xml files in the project will be downloaded; check for any conflicts
+                boolean anyExists = false;
+                for (ProjectFile pf : project.files) {
+                    if (pf.filename.toLowerCase().endsWith(".board.xml")
+                            && new File(panelDir, pf.filename).exists()) {
+                        anyExists = true;
+                        break;
+                    }
+                }
+                if (anyExists) {
+                    int choice = JOptionPane.showConfirmDialog(frame,
+                            Translations.getString("PartDb.Dialog.boardFileConflict.multipleMessage"),
+                            Translations.getString("PartDb.Dialog.boardFileConflict.title"),
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.QUESTION_MESSAGE);
+                    downloadBoardFiles = (choice == JOptionPane.YES_OPTION);
+                } else {
+                    downloadBoardFiles = true;
+                }
+            } else {
+                File localBoardCheck = new File(panelDir, boardFileRecord.filename);
+                if (localBoardCheck.exists()) {
+                    int choice = JOptionPane.showConfirmDialog(frame,
+                            String.format(Translations.getString("PartDb.Dialog.boardFileConflict.singleMessage"), boardFileRecord.filename),
+                            Translations.getString("PartDb.Dialog.boardFileConflict.title"),
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.QUESTION_MESSAGE);
+                    downloadBoardFiles = (choice == JOptionPane.YES_OPTION);
+                } else {
+                    downloadBoardFiles = true;
+                }
+            }
+
+            importPanelFromProjectAction.setEnabled(false);
+            importProgressBar.setValue(0);
+            importProgressBar.setMaximum(1);
+            importProgressBar.setString("0 / 0");
+            importProgressBar.setVisible(true);
+
+            new SwingWorker<File, int[]>() {
+                @Override
+                protected File doInBackground() throws Exception {
+                    panelDir.mkdirs();
+
+                    if (isPanelXml) {
+                        // --- Import existing .panel.xml ---
+                        // Collect board files from the project
+                        List<ProjectFile> boardFiles = new ArrayList<>();
+                        for (ProjectFile pf : project.files) {
+                            if (pf.filename.toLowerCase().endsWith(".board.xml")) {
+                                boardFiles.add(pf);
+                            }
+                        }
+
+                        // Download board XMLs (skip existing if user chose to keep local)
+                        for (ProjectFile bf : boardFiles) {
+                            File localBoard = new File(panelDir, bf.filename);
+                            if (downloadBoardFiles || !localBoard.exists()) {
+                                Files.write(localBoard.toPath(),
+                                        db.downloadFile(project.id, bf.id));
+                            }
+                        }
+
+                        if (importMissingParts) {
+                            // Collect all missing part IDs across all boards before loading
+                            java.util.LinkedHashSet<String> missingIds =
+                                    new java.util.LinkedHashSet<>();
+                            for (ProjectFile bf : boardFiles) {
+                                File localBoard = new File(panelDir, bf.filename);
+                                Board tmp = Configuration.get().createSerializer()
+                                        .read(Board.class, localBoard);
+                                for (org.openpnp.model.Placement p : tmp.getPlacements()) {
+                                    if (p.getPart() == null && p.getPartId() != null) {
+                                        missingIds.add(p.getPartId());
+                                    }
+                                }
+                            }
+                            int total = missingIds.size();
+                            publish(new int[]{0, total});
+                            int current = 0;
+                            for (String partId : missingIds) {
+                                org.openpnp.gui.importer.PartDbProjectImporter
+                                        .importOrCreatePart(partId, db);
+                                publish(new int[]{++current, total});
+                            }
+                        }
+
+                        // Pre-load boards so parts resolve correctly in loadPanel
+                        for (ProjectFile bf : boardFiles) {
+                            configuration.getBoard(new File(panelDir, bf.filename));
+                        }
+
+                        // Download panel XML
+                        Files.write(panelFile.toPath(),
+                                db.downloadFile(project.id, boardFileRecord.id));
+
+                    } else {
+                        // --- Create new panel from .board.xml ---
+                        File localBoardFile = new File(panelDir, boardFileRecord.filename);
+                        if (downloadBoardFiles) {
+                            Files.write(localBoardFile.toPath(),
+                                    db.downloadFile(project.id, boardFileRecord.id));
+                        }
+
+                        if (importMissingParts) {
+                            Board tempBoard = Configuration.get().createSerializer()
+                                    .read(Board.class, localBoardFile);
+                            java.util.LinkedHashSet<String> missingIds =
+                                    new java.util.LinkedHashSet<>();
+                            for (org.openpnp.model.Placement p : tempBoard.getPlacements()) {
+                                if (p.getPart() == null && p.getPartId() != null) {
+                                    missingIds.add(p.getPartId());
+                                }
+                            }
+                            int total = missingIds.size();
+                            publish(new int[]{0, total});
+                            int current = 0;
+                            for (String partId : missingIds) {
+                                org.openpnp.gui.importer.PartDbProjectImporter
+                                        .importOrCreatePart(partId, db);
+                                publish(new int[]{++current, total});
+                            }
+                        }
+
+                        Board board = configuration.getBoard(localBoardFile);
+                        Panel panel = new Panel();
+                        panel.setName(panelName);
+                        panel.setPartDbProjectId(project.id);
+                        BoardLocation bl = new BoardLocation(board);
+                        bl.setLocation(new Location(LengthUnit.Millimeters, 0, 0, 0, 0));
+                        panel.addChild(bl);
+                        Configuration.get().createSerializer().write(panel, panelFile);
+                        db.putFile(project.id, "OpenPnP Panel", panelFile.getName(),
+                                Files.readAllBytes(panelFile.toPath()));
+                    }
+                    return panelFile;
+                }
+
+                @Override
+                protected void process(List<int[]> chunks) {
+                    int[] latest = chunks.get(chunks.size() - 1);
+                    importProgressBar.setMaximum(Math.max(1, latest[1]));
+                    importProgressBar.setValue(latest[0]);
+                    importProgressBar.setString(latest[0] + " / " + latest[1]);
+                }
+
+                @Override
+                protected void done() {
+                    importProgressBar.setVisible(false);
+                    importPanelFromProjectAction.setEnabled(true);
+                    try {
+                        get();
+                        Panel panel = configuration.getPanel(panelFile);
+                        if (!isPanelXml) {
+                            panel.setName(panelName);
+                        }
+                        panel.setPartDbProjectId(project.id);
+                        for (BoardLocation bl : panel.getDescendantBoardLocations()) {
+                            Board b = bl.getBoard();
+                            if (b != null && b.getPartDbProjectId() == null) {
+                                b.setPartDbProjectId(project.id);
+                                configuration.saveBoard(b);
+                            }
+                        }
+                        panel.setDirty(false);
+                        panelsTableModel.fireTableDataChanged();
+                        selectPanel(panel);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        MessageBoxes.errorBox(frame, Translations.getString("PanelsPanel.Action.ImportPanelFromPartDB.failedTitle"),
+                                e.getMessage());
+                    }
+                }
+            }.execute();
+        }
+    };
+
+    public final Action pushPanelToPartDbAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbPush);
+            putValue(NAME, Translations.getString("PanelsPanel.Action.PushPanelToPartDB.name"));
+            putValue(SHORT_DESCRIPTION, Translations.getString("PanelsPanel.Action.PushPanelToPartDB.description"));
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent arg0) {
+            Panel panel = getSelection();
+            if (panel == null || panel.getPartDbProjectId() == null) {
+                return;
+            }
+            ProjectStorage db = PartDbDatabase.getProjectStorage();
+            if (db == null || !db.isConnected()) {
+                return;
+            }
+            try {
+                if (panel.isDirty()) {
+                    configuration.savePanel(panel);
+                }
+                String panelFileName = panel.getFile().getName();
+                byte[] bytes = Files.readAllBytes(panel.getFile().toPath());
+                db.putFile(panel.getPartDbProjectId(), "OpenPnP Panel", panelFileName, bytes);
+                panel.setDirty(false);
+                panelsTableModel.fireTableDataChanged();
+            } catch (Exception e) {
+                MessageBoxes.errorBox(frame, Translations.getString("PanelsPanel.Action.PushPanelToPartDB.failedTitle"), e.getMessage());
+            }
+        }
+    };
+
+    public final Action pullPanelFromPartDbAction = new AbstractAction() {
+        {
+            putValue(SMALL_ICON, Icons.partDbPull);
+            putValue(NAME, Translations.getString("PanelsPanel.Action.PullPanelFromPartDB.name"));
+            putValue(SHORT_DESCRIPTION,
+                    Translations.getString("PanelsPanel.Action.PullPanelFromPartDB.description"));
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent arg0) {
+            Panel panel = getSelection();
+            if (panel == null || panel.getPartDbProjectId() == null) {
+                return;
+            }
+            ProjectStorage db = PartDbDatabase.getProjectStorage();
+            if (db == null || !db.isConnected()) {
+                return;
+            }
+            final String projectId = panel.getPartDbProjectId();
+            final File panelFile = panel.getFile();
+            try {
+                List<ProjectFile> projectFiles = db.getProjectFiles(projectId);
+                // Download all board XMLs and the panel XML to the panel directory
+                File panelDir = panelFile.getParentFile();
+                for (ProjectFile pf : projectFiles) {
+                    String lower = pf.filename.toLowerCase();
+                    if (lower.endsWith(".board.xml") || lower.endsWith(".panel.xml")) {
+                        byte[] bytes = db.downloadFile(projectId, pf.id);
+                        Files.write(new File(panelDir, pf.filename).toPath(), bytes);
+                    }
+                }
+                // Reload panel
+                configuration.removePanel(panel);
+                Panel reloaded = configuration.getPanel(panelFile);
+                if (reloaded.getPartDbProjectId() == null) {
+                    reloaded.setPartDbProjectId(projectId);
+                }
+                for (BoardLocation bl : reloaded.getDescendantBoardLocations()) {
+                    Board b = bl.getBoard();
+                    if (b != null && b.getPartDbProjectId() == null) {
+                        b.setPartDbProjectId(projectId);
+                        configuration.saveBoard(b);
+                    }
+                }
+                reloaded.setDirty(false);
+                panelsTableModel.fireTableDataChanged();
+                selectPanel(reloaded);
+            } catch (Exception e) {
+                MessageBoxes.errorBox(frame, Translations.getString("PanelsPanel.Action.PullPanelFromPartDB.failedTitle"), e.getMessage());
             }
         }
     };

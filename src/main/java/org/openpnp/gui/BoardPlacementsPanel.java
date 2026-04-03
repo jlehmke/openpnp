@@ -33,7 +33,11 @@ import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.prefs.Preferences;
 import java.util.regex.PatternSyntaxException;
 
@@ -42,6 +46,7 @@ import javax.swing.Action;
 import javax.swing.DefaultCellEditor;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.SwingWorker;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
@@ -62,6 +67,7 @@ import javax.swing.event.DocumentListener;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellRenderer;
 import javax.swing.table.TableColumnModel;
 import javax.swing.table.TableRowSorter;
 
@@ -88,6 +94,7 @@ import org.openpnp.gui.tablemodel.PlacementsHolderPlacementsTableModel;
 import org.openpnp.gui.tablemodel.PlacementsHolderPlacementsTableModel.Status;
 import org.openpnp.gui.viewers.PlacementsHolderLocationViewerDialog;
 import org.openpnp.model.Abstract2DLocatable.Side;
+import org.openpnp.machine.reference.ReferenceMachine;
 import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
 import org.openpnp.model.BoardPad;
@@ -98,6 +105,9 @@ import org.openpnp.model.Part;
 import org.openpnp.model.Placement;
 import org.openpnp.model.Placement.ErrorHandling;
 import org.openpnp.model.Placement.Type;
+import org.openpnp.spi.Machine;
+import org.openpnp.spi.PartDatabase;
+import org.openpnp.spi.ProjectStorage;
 import org.openpnp.util.IdentifiableList;
 import org.pmw.tinylog.Logger;
 
@@ -125,6 +135,16 @@ public class BoardPlacementsPanel extends JPanel {
     
     private static Color typeColorFiducial = new Color(157, 188, 255);
     private static Color typeColorPlacement = new Color(255, 255, 255);
+    private static Color colorBomDisabled = new Color(255, 230, 80);   // yellow: in BOM but disabled
+    private static Color colorBomMissing  = new Color(173, 216, 230);  // light blue: not in BOM
+
+    /**
+     * Set of reference designators (e.g. "R1", "U5") present in the PartDB project BOM
+     * for the currently displayed board. {@code null} means no project board is shown
+     * or BOM data is unavailable. Empty set means BOM was fetched but had no entries
+     * (no highlighting in that case).
+     */
+    private volatile Set<String> projectBomDesignators = null;
     
     public BoardPlacementsPanel(BoardsPanel boardsPanel) {
     	this.boardsPanel = boardsPanel;
@@ -200,6 +220,35 @@ public class BoardPlacementsPanel extends JPanel {
                 int column = convertColumnIndexToModel(columnAtPoint(evt.getPoint()));
                 if(column==11) { return Translations.getString("BoardsPanel.BoardPlacements.Placements.Rank.toolTip"); } //$NON-NLS-1$
                 return null;
+            }
+
+            @Override
+            public Component prepareRenderer(TableCellRenderer renderer, int row, int column) {
+                Component c = super.prepareRenderer(renderer, row, column);
+                if (isRowSelected(row)) {
+                    return c;
+                }
+                // Always reset background to default/alternating before applying custom color
+                Color bg = UIManager.getColor("Table.alternateRowColor");
+                c.setBackground((row % 2 == 0 || bg == null) ? getBackground() : bg);
+                // BOM state highlighting (only when BOM data is loaded)
+                if (board != null && projectBomDesignators != null
+                        && !projectBomDesignators.isEmpty()) {
+                    int modelRow = convertRowIndexToModel(row);
+                    if (modelRow < board.getPlacements().size()) {
+                        Placement p = board.getPlacements().get(modelRow);
+                        if (p.getType() == Placement.Type.Placement) {
+                            if (!projectBomDesignators.contains(p.getId())) {
+                                // Placement has no BOM entry at all → light blue
+                                c.setBackground(colorBomMissing);
+                            } else if (!p.isEnabled()) {
+                                // In BOM but disabled in OpenPnP → yellow
+                                c.setBackground(colorBomDisabled);
+                            }
+                        }
+                    }
+                }
+                return c;
             }
         };
         
@@ -345,7 +394,7 @@ public class BoardPlacementsPanel extends JPanel {
         toolBarPlacements.add(btnImport);
 
         toolBarPlacements.addSeparator();
-        
+
         JButton btnViewer = new JButton(viewerAction);
         btnViewer.setHideActionText(true);
         viewerAction.setEnabled(false);
@@ -441,6 +490,47 @@ public class BoardPlacementsPanel extends JPanel {
             boardViewer.setPlacementsHolder(board);
         }
         updateRowFilter();
+        refreshProjectBom(board);
+    }
+
+    private void refreshProjectBom(Board b) {
+        String projectId = (b != null) ? b.getPartDbProjectId() : null;
+        if (projectId == null) {
+            projectBomDesignators = null;
+            return;
+        }
+        projectBomDesignators = Collections.emptySet(); // loading
+        new SwingWorker<Set<String>, Void>() {
+            @Override
+            protected Set<String> doInBackground() throws Exception {
+                Machine machine = Configuration.get().getMachine();
+                if (!(machine instanceof ReferenceMachine)) {
+                    return null;
+                }
+                PartDatabase db = ((ReferenceMachine) machine).getPartDatabase();
+                if (!(db instanceof ProjectStorage)) {
+                    return null;
+                }
+                ProjectStorage ps = (ProjectStorage) db;
+                if (!ps.isConnected()) {
+                    return null;
+                }
+                Map<String, String> bom = ps.getDesignatorToPartName(projectId);
+                return bom.isEmpty() ? Collections.emptySet() : new HashSet<>(bom.keySet());
+            }
+            @Override
+            protected void done() {
+                try {
+                    Set<String> result = get();
+                    if (result != null) {
+                        projectBomDesignators = result;
+                        table.repaint();
+                    }
+                } catch (Exception e) {
+                    Logger.debug("PartDB: could not fetch BOM for project {}: {}", projectId, e.getMessage());
+                }
+            }
+        }.execute();
     }
 
     public Placement getSelection() {

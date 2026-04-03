@@ -47,6 +47,10 @@ public class Panel extends PlacementsHolder<Panel> implements PropertyChangeList
      */
     @Attribute(required = false)
     private Double version = null;
+
+    /** PartDB project ID this panel is linked to, or {@code null} if not linked. */
+    @Attribute(name = "partdb-project-id", required = false)
+    private String partDbProjectId;
     
     /**
      * @deprecated The Id is now carried by the {@link PanelLocation}
@@ -730,6 +734,15 @@ public class Panel extends PlacementsHolder<Panel> implements PropertyChangeList
      */
     public Double getVersion() {
         return version;
+    }
+
+    public String getPartDbProjectId() {
+        return partDbProjectId;
+    }
+
+    public void setPartDbProjectId(String partDbProjectId) {
+        this.partDbProjectId = partDbProjectId;
+        setDirty(true);
     }
     
     /**
