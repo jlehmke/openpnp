@@ -21,6 +21,7 @@ package org.openpnp.gui;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.FileDialog;
 import java.awt.Frame;
 import java.awt.Rectangle;
@@ -36,8 +37,10 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.FilenameFilter;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.prefs.Preferences;
@@ -52,6 +55,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
@@ -60,6 +64,7 @@ import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.border.TitledBorder;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
@@ -78,6 +83,7 @@ import org.openpnp.events.PlacementsHolderLocationChangedEvent;
 import org.openpnp.gui.JobPanel.OpenRecentJobAction;
 import org.openpnp.gui.components.AutoSelectTextTable;
 import org.openpnp.gui.components.ExistingBoardOrPanelDialog;
+import org.openpnp.gui.importer.PartDbProjectImporter;
 import org.openpnp.gui.processes.MultiPlacementBoardLocationProcess;
 import org.openpnp.gui.support.ActionGroup;
 import org.openpnp.gui.support.CustomBooleanRenderer;
@@ -93,31 +99,35 @@ import org.openpnp.gui.support.RotationCellValue;
 import org.openpnp.gui.support.TableUtils;
 import org.openpnp.gui.tablemodel.PlacementsHolderLocationsTableModel;
 import org.openpnp.gui.viewers.PlacementsHolderLocationViewerDialog;
-import org.openpnp.model.Board;
 import org.openpnp.model.Abstract2DLocatable.Side;
-import org.openpnp.model.Configuration.TablesLinked;
+import org.openpnp.model.Board;
 import org.openpnp.model.BoardLocation;
 import org.openpnp.model.Configuration;
-import org.openpnp.model.PlacementsHolderLocation;
+import org.openpnp.model.Configuration.TablesLinked;
 import org.openpnp.model.Job;
 import org.openpnp.model.Length;
 import org.openpnp.model.Location;
+import org.openpnp.model.Motion;
 import org.openpnp.model.Panel;
 import org.openpnp.model.PanelLocation;
 import org.openpnp.model.Part;
-import org.openpnp.model.Motion;
 import org.openpnp.model.Placement;
 import org.openpnp.model.Placement.Type;
+import org.openpnp.model.PlacementsHolderLocation;
+import org.openpnp.model.ProjectFile;
+import org.openpnp.model.ProjectRecord;
 import org.openpnp.spi.Camera;
 import org.openpnp.spi.Feeder;
 import org.openpnp.spi.HeadMountable;
 import org.openpnp.spi.JobProcessor;
 import org.openpnp.spi.JobProcessor.JobProcessorException;
 import org.openpnp.spi.JobProcessor.TextStatusListener;
+import org.openpnp.machine.reference.PartDbDatabase;
 import org.openpnp.spi.Machine;
 import org.openpnp.spi.MachineListener;
 import org.openpnp.spi.MotionPlanner;
 import org.openpnp.spi.Nozzle;
+import org.openpnp.spi.ProjectStorage;
 import org.openpnp.util.MovableUtils;
 import org.openpnp.util.UiUtils;
 import org.pmw.tinylog.Logger;
@@ -155,6 +165,8 @@ public class JobPanel extends JPanel {
     private ActionGroup singleTopLevelSelectionActionGroup;
     private ActionGroup multiTopLevelSelectionActionGroup;
 
+    private JProgressBar importProgressBar = new JProgressBar();
+
     private Preferences prefs = Preferences.userNodeForPackage(JobPanel.class);
 
     public JMenu mnOpenRecent;
@@ -172,6 +184,10 @@ public class JobPanel extends JPanel {
     public JobPanel(Configuration configuration, MainFrame frame) {
         this.configuration = configuration;
         this.mainFrame = frame;
+
+        importProgressBar.setPreferredSize(new Dimension(150, importProgressBar.getPreferredSize().height));
+        importProgressBar.setStringPainted(true);
+        importProgressBar.setVisible(false);
 
         singleSelectionActionGroup =
                 new ActionGroup(captureToolBoardLocationAction, moveCameraToBoardLocationAction,
@@ -373,7 +389,12 @@ public class JobPanel extends JPanel {
 
         JToolBar toolBarBoards = new JToolBar();
         toolBarBoards.setFloatable(false);
-        pnlBoards.add(toolBarBoards, BorderLayout.NORTH);
+        JPanel toolbarRow = new JPanel(new BorderLayout());
+        toolbarRow.add(toolBarBoards, BorderLayout.CENTER);
+        JPanel progressPanel = new JPanel();
+        progressPanel.add(importProgressBar);
+        toolbarRow.add(progressPanel, BorderLayout.EAST);
+        pnlBoards.add(toolbarRow, BorderLayout.NORTH);
 
         JButton btnStartPauseResumeJob = new JButton(startPauseResumeJobAction);
         btnStartPauseResumeJob.setHideActionText(true);
@@ -400,6 +421,8 @@ public class JobPanel extends JPanel {
                 menu.addSeparator();
                 menu.add(new JMenuItem(addNewPanelAction));
                 menu.add(new JMenuItem(addExistingPanelAction));
+                menu.addSeparator();
+                menu.add(new JMenuItem(addFromDatabaseAction));
                 menu.show(btnAddBoard, (int) btnAddBoard.getWidth(), (int) btnAddBoard.getHeight());
             }
         });
@@ -1355,6 +1378,251 @@ public class JobPanel extends JPanel {
         Helpers.selectObjectTableRow(jobTable, panelLocation);
     }
     
+    public final Action addFromDatabaseAction = new AbstractAction() {
+        {
+            putValue(NAME, Translations.getString("JobPanel.Action.AddFromDatabase.name"));
+            putValue(SMALL_ICON, Icons.partDbAdd);
+            putValue(SHORT_DESCRIPTION,
+                    Translations.getString("JobPanel.Action.AddFromDatabase.description"));
+        }
+
+        @Override
+        public void actionPerformed(ActionEvent arg0) {
+            ProjectStorage db = PartDbDatabase.getProjectStorage();
+            if (db == null || !db.isConnected()) {
+                JOptionPane.showMessageDialog(mainFrame,
+                        Translations.getString("PartDb.Dialog.noProjectStorage.message"),
+                        Translations.getString("PartDb.Dialog.noProjectStorage.title"),
+                        JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            ProjectBoardImportDialog dlg = new ProjectBoardImportDialog(mainFrame, db, false);
+            dlg.setVisible(true);
+
+            final ProjectRecord project = dlg.getSelectedProject();
+            final ProjectFile selectedFile = dlg.getSelectedFile();
+            if (project == null) {
+                return;
+            }
+            if (selectedFile == null && !dlg.isCreateMode()) {
+                return;
+            }
+
+            final boolean importMissingParts = dlg.isImportMissingParts();
+            final boolean isPanelXml = selectedFile != null
+                    && selectedFile.filename.toLowerCase().endsWith(".panel.xml");
+            final boolean isBoardXml = selectedFile != null
+                    && selectedFile.filename.toLowerCase().endsWith(".board.xml");
+
+            // Ask user where to save
+            String saveExt = isPanelXml ? ".panel.xml" : ".board.xml";
+            String defaultName = project.name.replaceAll("[^a-zA-Z0-9._-]", "_") + saveExt;
+            FileDialog fileDialog = new FileDialog(mainFrame,
+                    isPanelXml ? Translations.getString("JobPanel.Action.AddFromDatabase.savePanelTitle") : Translations.getString("JobPanel.Action.AddFromDatabase.saveBoardTitle"), FileDialog.SAVE);
+            fileDialog.setFilenameFilter((dir, name) -> name.toLowerCase().endsWith(saveExt));
+            fileDialog.setFile(defaultName);
+            fileDialog.setVisible(true);
+            if (fileDialog.getFile() == null) {
+                return;
+            }
+            String filename = fileDialog.getFile();
+            if (!filename.toLowerCase().endsWith(saveExt)) {
+                filename = filename + saveExt;
+            }
+            final File saveFile = new File(fileDialog.getDirectory(), filename);
+
+            // Derive display name
+            String fileStem = saveFile.getName();
+            if (fileStem.toLowerCase().endsWith(saveExt)) {
+                fileStem = fileStem.substring(0, fileStem.length() - saveExt.length());
+            }
+            final String projectStem = project.name.replaceAll("[^a-zA-Z0-9._-]", "_");
+            final String itemName = (!fileStem.equals(projectStem)
+                    && !fileStem.equals(project.name))
+                    ? project.name + " [" + fileStem + "]"
+                    : project.name;
+
+            // For panel.xml: check board file conflicts on EDT before worker
+            final boolean downloadBoardFiles;
+            if (isPanelXml) {
+                boolean anyExists = false;
+                File saveDir = saveFile.getParentFile();
+                for (ProjectFile pf : project.files) {
+                    if (pf.filename.toLowerCase().endsWith(".board.xml")
+                            && new File(saveDir, pf.filename).exists()) {
+                        anyExists = true;
+                        break;
+                    }
+                }
+                if (anyExists) {
+                    int choice = JOptionPane.showConfirmDialog(mainFrame,
+                            Translations.getString("PartDb.Dialog.boardFileConflict.multipleMessage"),
+                            Translations.getString("PartDb.Dialog.boardFileConflict.title"),
+                            JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+                    downloadBoardFiles = (choice == JOptionPane.YES_OPTION);
+                } else {
+                    downloadBoardFiles = true;
+                }
+            } else if (isBoardXml && saveFile.exists()) {
+                int choice = JOptionPane.showConfirmDialog(mainFrame,
+                        String.format(Translations.getString("PartDb.Dialog.fileConflict.message"), saveFile.getName()),
+                        Translations.getString("PartDb.Dialog.fileConflict.title"),
+                        JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+                downloadBoardFiles = (choice == JOptionPane.YES_OPTION);
+            } else {
+                downloadBoardFiles = true;
+            }
+
+            addFromDatabaseAction.setEnabled(false);
+            importProgressBar.setValue(0);
+            importProgressBar.setMaximum(1);
+            importProgressBar.setString("0 / 0");
+            importProgressBar.setVisible(true);
+
+            new SwingWorker<Void, int[]>() {
+                @Override
+                protected Void doInBackground() throws Exception {
+                    File saveDir = saveFile.getParentFile();
+                    if (saveDir != null) {
+                        saveDir.mkdirs();
+                    }
+
+                    if (isPanelXml) {
+                        // Collect board files from the project
+                        List<ProjectFile> boardFiles = new ArrayList<>();
+                        for (ProjectFile pf : project.files) {
+                            if (pf.filename.toLowerCase().endsWith(".board.xml")) {
+                                boardFiles.add(pf);
+                            }
+                        }
+                        // Download board XMLs
+                        for (ProjectFile bf : boardFiles) {
+                            File localBoard = new File(saveDir, bf.filename);
+                            if (downloadBoardFiles || !localBoard.exists()) {
+                                Files.write(localBoard.toPath(),
+                                        db.downloadFile(project.id, bf.id));
+                            }
+                        }
+                        // Import missing parts
+                        if (importMissingParts) {
+                            LinkedHashSet<String> missingIds = new LinkedHashSet<>();
+                            for (ProjectFile bf : boardFiles) {
+                                Board tmp = Configuration.get().createSerializer()
+                                        .read(Board.class, new File(saveDir, bf.filename));
+                                for (Placement p : tmp.getPlacements()) {
+                                    if (p.getPart() == null && p.getPartId() != null) {
+                                        missingIds.add(p.getPartId());
+                                    }
+                                }
+                            }
+                            int total = missingIds.size();
+                            publish(new int[]{0, total});
+                            int current = 0;
+                            for (String partId : missingIds) {
+                                PartDbProjectImporter.importOrCreatePart(partId, db);
+                                publish(new int[]{++current, total});
+                            }
+                        }
+                        // Pre-load boards so parts resolve correctly in loadPanel
+                        for (ProjectFile bf : boardFiles) {
+                            configuration.getBoard(new File(saveDir, bf.filename));
+                        }
+                        // Download panel XML
+                        Files.write(saveFile.toPath(),
+                                db.downloadFile(project.id, selectedFile.id));
+
+                    } else if (selectedFile == null) {
+                        // Create mode — empty board
+                        Board board = new Board();
+                        board.setName(itemName);
+                        board.setPartDbProjectId(project.id);
+                        board.setFile(saveFile);
+                        Configuration.get().createSerializer().write(board, saveFile);
+
+                    } else if (isBoardXml) {
+                        // Download existing board XML
+                        if (downloadBoardFiles) {
+                            Files.write(saveFile.toPath(),
+                                    db.downloadFile(project.id, selectedFile.id));
+                        }
+                        if (importMissingParts) {
+                            Board tmp = Configuration.get().createSerializer()
+                                    .read(Board.class, saveFile);
+                            LinkedHashSet<String> missingIds = new LinkedHashSet<>();
+                            for (Placement p : tmp.getPlacements()) {
+                                if (p.getPart() == null && p.getPartId() != null) {
+                                    missingIds.add(p.getPartId());
+                                }
+                            }
+                            int total = missingIds.size();
+                            publish(new int[]{0, total});
+                            int current = 0;
+                            for (String partId : missingIds) {
+                                PartDbProjectImporter.importOrCreatePart(partId, db);
+                                publish(new int[]{++current, total});
+                            }
+                        }
+
+                    } else {
+                        // Placement file (.pos / .csv) — import via BOM
+                        PartDbProjectImporter importer = new PartDbProjectImporter();
+                        Board board = importer.importBoardFromProjectStorage(mainFrame, project,
+                                selectedFile, db, importMissingParts,
+                                (current, total) -> publish(new int[]{current, total}));
+                        if (board == null) {
+                            return null;
+                        }
+                        board.setName(itemName);
+                        board.setPartDbProjectId(project.id);
+                        board.setFile(saveFile);
+                        Configuration.get().createSerializer().write(board, saveFile);
+                    }
+                    return null;
+                }
+
+                @Override
+                protected void process(List<int[]> chunks) {
+                    int[] latest = chunks.get(chunks.size() - 1);
+                    importProgressBar.setMaximum(Math.max(1, latest[1]));
+                    importProgressBar.setValue(latest[0]);
+                    importProgressBar.setString(latest[0] + " / " + latest[1]);
+                }
+
+                @Override
+                protected void done() {
+                    importProgressBar.setVisible(false);
+                    addFromDatabaseAction.setEnabled(true);
+                    try {
+                        get();
+                        if (isPanelXml) {
+                            Panel panel = configuration.getPanel(saveFile);
+                            panel.setPartDbProjectId(project.id);
+                            for (BoardLocation bl : panel.getDescendantBoardLocations()) {
+                                Board b = bl.getBoard();
+                                if (b != null && b.getPartDbProjectId() == null) {
+                                    b.setPartDbProjectId(project.id);
+                                    configuration.saveBoard(b);
+                                }
+                            }
+                            panel.setDirty(false);
+                            addPanel(saveFile);
+                        } else {
+                            addBoard(saveFile);
+                            Board board = configuration.getBoard(saveFile);
+                            board.setPartDbProjectId(project.id);
+                            board.setDirty(!isBoardXml);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        MessageBoxes.errorBox(mainFrame, Translations.getString("JobPanel.Action.AddFromDatabase.failedTitle"),
+                                e.getMessage());
+                    }
+                }
+            }.execute();
+        }
+    };
+
     public final Action removeBoardAction = new AbstractAction() {
         {
             putValue(SMALL_ICON, Icons.delete);

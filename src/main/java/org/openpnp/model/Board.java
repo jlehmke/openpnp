@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.simpleframework.xml.Attribute;
 import org.simpleframework.xml.ElementList;
 import org.simpleframework.xml.Root;
 import org.simpleframework.xml.Version;
@@ -39,7 +40,11 @@ import org.simpleframework.xml.core.Commit;
 public class Board extends PlacementsHolder<Board> implements PropertyChangeListener {
 
     @Version(revision=1.1)
-    private double version;    
+    private double version;
+
+    /** PartDB project ID this board is linked to, or {@code null} if not linked. */
+    @Attribute(name = "partdb-project-id", required = false)
+    private String partDbProjectId;
 
     /**
      * @deprecated Fiducials are now held in the placements List inherited from 
@@ -109,6 +114,15 @@ public class Board extends PlacementsHolder<Board> implements PropertyChangeList
     //PlacementsHolder.  On second thought, it might make more sense to move all this to the 
     //footprint associated with each package. And then change the enabled field of Placement to 
     //be an enumeration something like: Place Only, Paste Only, Paste and Place, and Disabled.
+    public String getPartDbProjectId() {
+        return partDbProjectId;
+    }
+
+    public void setPartDbProjectId(String partDbProjectId) {
+        this.partDbProjectId = partDbProjectId;
+        setDirty(true);
+    }
+
     public List<BoardPad> getSolderPastePads() {
         return Collections.unmodifiableList(solderPastePads);
     }

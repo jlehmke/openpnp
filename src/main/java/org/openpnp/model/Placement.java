@@ -126,6 +126,11 @@ public class Placement extends Abstract2DLocatable<Placement> {
         return part;
     }
 
+    /** Returns the part ID stored in the XML, even if the part is not currently in Configuration. */
+    public String getPartId() {
+        return partId;
+    }
+
     public void setPart(Part part) {
         Part oldValue = this.part;
         this.part = part;

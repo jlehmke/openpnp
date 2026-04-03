@@ -3,6 +3,7 @@ package org.openpnp.machine.reference;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,12 +24,15 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.openpnp.gui.support.Wizard;
 import org.openpnp.machine.reference.wizards.PartDbDatabaseWizard;
-import org.openpnp.model.Footprint;
 import org.openpnp.model.Configuration;
+import org.openpnp.model.Footprint;
 import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Package;
 import org.openpnp.model.Part;
+import org.openpnp.model.ProjectFile;
+import org.openpnp.model.ProjectRecord;
+import org.openpnp.spi.ProjectStorage;
 import org.openpnp.spi.base.AbstractPartDatabase;
 import org.pmw.tinylog.Logger;
 import org.simpleframework.xml.Attribute;
@@ -44,7 +48,7 @@ import org.simpleframework.xml.core.Commit;
  * The PartDB part name is used as the OpenPnP Part ID.
  */
 @Root
-public class PartDbDatabase extends AbstractPartDatabase {
+public class PartDbDatabase extends AbstractPartDatabase implements ProjectStorage {
 
     private final transient HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
@@ -274,6 +278,21 @@ public class PartDbDatabase extends AbstractPartDatabase {
         return new PartDbDatabaseWizard(this);
     }
 
+    /**
+     * Returns the configured {@link ProjectStorage} for the current machine, or {@code null} if
+     * none is configured or connected. Convenience helper for GUI classes.
+     */
+    public static ProjectStorage getProjectStorage() {
+        org.openpnp.spi.Machine machine = Configuration.get().getMachine();
+        if (machine instanceof ReferenceMachine) {
+            org.openpnp.spi.PartDatabase db = ((ReferenceMachine) machine).getPartDatabase();
+            if (db instanceof ProjectStorage) {
+                return (ProjectStorage) db;
+            }
+        }
+        return null;
+    }
+
     // -------------------------------------------------------------------------
     // Connection
     // -------------------------------------------------------------------------
@@ -434,10 +453,17 @@ public class PartDbDatabase extends AbstractPartDatabase {
         Logger.info("PartDB: updated part '{}' (id={})", part.getId(), partDbId);
         Length height = part.getHeight();
         double heightMm = (height != null) ? height.convertToUnits(LengthUnit.Millimeters).getValue() : 0;
+        double widthMm = 0;
+        double lengthMm = 0;
+        if (part.getPackage() != null && part.getPackage().getFootprint() != null) {
+            Footprint fp = part.getPackage().getFootprint();
+            widthMm = fp.getBodyWidth();
+            lengthMm = fp.getBodyHeight(); // OpenPnP bodyHeight = PartDB "length"
+        }
         try {
-            pushHeightParameter(partDbId, heightMm);
+            pushDimensionParameters(partDbId, heightMm, widthMm, lengthMm);
         } catch (Exception e) {
-            Logger.warn("PartDB: could not push height parameter ({}): {}",
+            Logger.warn("PartDB: could not push dimension parameters ({}): {}",
                     e.getClass().getSimpleName(), e.getMessage());
         }
         Integer pending = pendingPlacements.remove(part.getId());
@@ -898,68 +924,75 @@ public class PartDbDatabase extends AbstractPartDatabase {
         return v != null ? v : fetchParamValue(fpParams, name);
     }
 
-    private void pushHeightParameter(int partDbId, double heightMm) throws Exception {
+    /**
+     * Pushes height, body-width, and body-length (in mm) as PartDB parameters.
+     * Existing parameters are updated in-place; missing ones are created.
+     * Zero/negative values are skipped.
+     */
+    private void pushDimensionParameters(int partDbId,
+            double heightMm, double widthMm, double lengthMm) throws Exception {
+        String[] names   = {"height", "width",  "length"};
+        String[] symbols = {"h",      "w",      "l"};
+        double[] values  = {heightMm, widthMm,  lengthMm};
+
+        boolean anyToPush = false;
+        for (double v : values) {
+            if (v > 0) {
+                anyToPush = true;
+                break;
+            }
+        }
+        if (!anyToPush) {
+            return;
+        }
+
         String partJson = request("GET", "/api/parts/" + partDbId, null);
         JsonObject partData = parseObject(partJson);
 
-        int existingParamId = -1;
+        // Map existing param names to their DB ids for in-place updates.
+        int[] existingIds = {-1, -1, -1};
         if (partData.has("parameters")) {
             for (JsonElement el : partData.getAsJsonArray("parameters")) {
                 JsonObject param = el.getAsJsonObject();
-                if ("height".equalsIgnoreCase(param.get("name").getAsString())) {
-                    existingParamId = param.get("id").getAsInt();
-                    break;
+                String pName = param.get("name").getAsString();
+                for (int i = 0; i < names.length; i++) {
+                    if (names[i].equalsIgnoreCase(pName) && param.has("id")) {
+                        existingIds[i] = param.get("id").getAsInt();
+                        break;
+                    }
                 }
             }
         }
 
-        String heightBody = "{\"_type\":\"Part\""
-                + ",\"name\":\"height\""
-                + ",\"symbol\":\"h\""
-                + ",\"unit\":\"mm\""
-                + ",\"value_typical\":" + heightMm
+        // Update existing params via direct PATCH
+        for (int i = 0; i < names.length; i++) {
+            if (values[i] > 0 && existingIds[i] >= 0) {
+                request("PATCH", "/api/parameters/" + existingIds[i],
+                        buildDimParamJson(names[i], symbols[i], values[i]));
+                Logger.debug("PartDB: updated {} parameter (id={}) for part id={}",
+                        names[i], existingIds[i], partDbId);
+            }
+        }
+
+        // Create missing params via POST /api/parameters (each individually)
+        for (int i = 0; i < names.length; i++) {
+            if (values[i] > 0 && existingIds[i] < 0) {
+                String body = "{\"name\":" + jsonString(names[i])
+                        + ",\"symbol\":" + jsonString(symbols[i])
+                        + ",\"unit\":\"mm\",\"value_typical\":" + values[i]
+                        + ",\"value_text\":\"\",\"group\":\"\""
+                        + ",\"element\":\"/api/parts/" + partDbId + "\"}";
+                request("POST", "/api/parameters", body);
+                Logger.debug("PartDB: created {} parameter for part id={}", names[i], partDbId);
+            }
+        }
+    }
+
+    private String buildDimParamJson(String name, String symbol, double valueMm) {
+        return "{\"_type\":\"Part\",\"name\":" + jsonString(name)
+                + ",\"symbol\":" + jsonString(symbol)
+                + ",\"unit\":\"mm\",\"value_typical\":" + valueMm
                 + ",\"value_text\":\"\",\"group\":\"\"}";
-
-        if (existingParamId >= 0) {
-            // Update the existing parameter directly
-            request("PATCH", "/api/parameters/" + existingParamId, heightBody);
-            Logger.debug("PartDB: updated height parameter (id={}) for part id={}", existingParamId, partDbId);
-        } else {
-            // POST /api/parameters/ doesn't exist — add via PATCH on the part.
-            // Include existing parameters with their @id (so they are updated, not recreated)
-            // plus the new height entry without @id (so it is created).
-            StringBuilder params = new StringBuilder("[");
-            boolean first = true;
-            if (partData.has("parameters")) {
-                for (JsonElement el : partData.getAsJsonArray("parameters")) {
-                    JsonObject param = el.getAsJsonObject();
-                    if (!first) {
-                        params.append(",");
-                    }
-                    first = false;
-                    String iri = param.has("@id") ? param.get("@id").getAsString() : null;
-                    params.append("{\"_type\":\"Part\"");
-                    if (iri != null) {
-                        params.append(",\"@id\":").append(jsonString(iri));
-                    }
-                    params.append(",\"name\":").append(jsonString(
-                                    param.has("name") ? param.get("name").getAsString() : ""))
-                          .append(",\"symbol\":").append(jsonString(
-                                    param.has("symbol") ? param.get("symbol").getAsString() : ""))
-                          .append(",\"unit\":").append(jsonString(
-                                    param.has("unit") ? param.get("unit").getAsString() : ""))
-                          .append(",\"value_typical\":")
-                          .append(param.has("value_typical") ? param.get("value_typical").getAsDouble() : 0)
-                          .append(",\"value_text\":\"\",\"group\":\"\"}");
-                }
-            }
-            if (!first) {
-                params.append(",");
-            }
-            params.append(heightBody).append("]");
-            request("PATCH", "/api/parts/" + partDbId, "{\"parameters\":" + params + "}");
-            Logger.debug("PartDB: created height parameter for part id={}", partDbId);
-        }
     }
 
     private String buildPartJson(Part part) {
@@ -1007,6 +1040,274 @@ public class PartDbDatabase extends AbstractPartDatabase {
 
     private static String urlEncode(String s) throws Exception {
         return URLEncoder.encode(s, StandardCharsets.UTF_8.name());
+    }
+
+    // -------------------------------------------------------------------------
+    // ProjectStorage implementation
+    // -------------------------------------------------------------------------
+
+    /** Cache for attachment type name → PartDB attachment type ID. */
+    private final transient Map<String, Integer> attachmentTypeIdCache = new ConcurrentHashMap<>();
+
+    @Override
+    public List<ProjectRecord> listProjects(String nameFilter) throws Exception {
+        String encodedFilter = (nameFilter == null || nameFilter.isEmpty())
+                ? "" : "&name=%25" + urlEncode(nameFilter) + "%25";
+        List<ProjectRecord> result = new ArrayList<>();
+        int page = 1;
+        while (true) {
+            String json = request("GET",
+                    "/api/projects?itemsPerPage=30&page=" + page + encodedFilter, null);
+            JsonArray arr = parseArray(json);
+            if (arr.size() == 0) {
+                break;
+            }
+            for (JsonElement el : arr) {
+                JsonObject p = el.getAsJsonObject();
+                String id = String.valueOf(p.get("id").getAsInt());
+                String name = p.has("name") ? p.get("name").getAsString() : "";
+                String desc = p.has("description") ? p.get("description").getAsString() : "";
+                List<ProjectFile> files = parseAttachments(p);
+                result.add(new ProjectRecord(id, name, desc, files));
+            }
+            if (arr.size() < 30) {
+                break; // last page
+            }
+            page++;
+        }
+        return result;
+    }
+
+    @Override
+    public List<ProjectFile> getProjectFiles(String projectId) throws Exception {
+        String json = request("GET", "/api/projects/" + projectId, null);
+        JsonObject project = parseObject(json);
+        return parseAttachments(project);
+    }
+
+    private List<ProjectFile> parseAttachments(JsonObject projectObj) {
+        List<ProjectFile> files = new ArrayList<>();
+        if (!projectObj.has("attachments")) {
+            return files;
+        }
+        JsonArray atts = projectObj.getAsJsonArray("attachments");
+        for (JsonElement el : atts) {
+            JsonObject att = el.getAsJsonObject();
+            String id = String.valueOf(att.get("id").getAsInt());
+            String name = att.has("name") ? att.get("name").getAsString() : "";
+            String typeName = "";
+            if (att.has("attachment_type") && !att.get("attachment_type").isJsonNull()) {
+                JsonObject typeObj = att.getAsJsonObject("attachment_type");
+                if (typeObj.has("name")) {
+                    typeName = typeObj.get("name").getAsString();
+                }
+            }
+            // Use the original attachment name as filename (for matching in putFile).
+            // Build downloadUrl from internal_path or external_path.
+            String filename = name;
+            String downloadUrl = "";
+            if (att.has("internal_path") && !att.get("internal_path").isJsonNull()) {
+                String ip = att.get("internal_path").getAsString();
+                if (!ip.isEmpty()) {
+                    downloadUrl = url.replaceAll("/+$", "") + "/" + ip.replaceAll("^/+", "");
+                }
+            }
+            if (downloadUrl.isEmpty() && att.has("external_path")
+                    && !att.get("external_path").isJsonNull()) {
+                String ep = att.get("external_path").getAsString();
+                if (!ep.isEmpty() && allowExternalAttachments) {
+                    downloadUrl = ep;
+                }
+            }
+            files.add(new ProjectFile(id, filename, typeName, downloadUrl));
+        }
+        return files;
+    }
+
+    @Override
+    public byte[] downloadFile(String projectId, String fileId) throws Exception {
+        // Find the file in the project to get its download URL
+        List<ProjectFile> files = getProjectFiles(projectId);
+        for (ProjectFile f : files) {
+            if (f.id.equals(fileId)) {
+                return requestBytes(f.downloadUrl);
+            }
+        }
+        throw new IOException("File ID " + fileId + " not found in project " + projectId);
+    }
+
+    @Override
+    public void putFile(String projectId, String fileType, String filename, byte[] content)
+            throws Exception {
+        if (readOnly) {
+            Logger.warn("PartDB is in read-only mode; skipping upload of {}", filename);
+            return;
+        }
+        // Look for an existing attachment with the same filename in the project
+        List<ProjectFile> existing = getProjectFiles(projectId);
+        String existingId = null;
+        for (ProjectFile f : existing) {
+            if (filename.equals(f.filename)) {
+                existingId = f.id;
+                break;
+            }
+        }
+
+        String b64 = Base64.getEncoder().encodeToString(content);
+        String uploadBlock = "{\"data\":" + jsonString(b64)
+                + ",\"filename\":" + jsonString(filename) + "}";
+
+        if (existingId != null) {
+            // Update existing attachment
+            String body = "{\"upload\":" + uploadBlock + "}";
+            request("PATCH", "/api/attachments/" + existingId, body);
+            Logger.info("PartDB updated attachment '{}' (id={}) in project {}", filename,
+                    existingId, projectId);
+        } else {
+            // Create new attachment
+            int typeId = ensureAttachmentType(fileType);
+            String body = "{"
+                    + "\"_type\":\"Project\","
+                    + "\"name\":" + jsonString(filename) + ","
+                    + "\"attachment_type\":\"/api/attachment_types/" + typeId + "\","
+                    + "\"element\":\"/api/projects/" + projectId + "\","
+                    + "\"upload\":" + uploadBlock
+                    + "}";
+            request("POST", "/api/attachments", body);
+            Logger.info("PartDB created attachment '{}' (type='{}') in project {}", filename,
+                    fileType, projectId);
+        }
+    }
+
+    @Override
+    public Map<String, String> getDesignatorToPartName(String projectId) throws Exception {
+        Map<String, String> result = new HashMap<>();
+        int page = 1;
+        while (true) {
+            String json = request("GET",
+                    "/api/projects/" + projectId + "/bom?itemsPerPage=30&page=" + page, null);
+            JsonArray arr = parseArray(json);
+            if (arr.size() == 0) {
+                break;
+            }
+            for (JsonElement el : arr) {
+                JsonObject entry = el.getAsJsonObject();
+                if (!entry.has("part") || entry.get("part").isJsonNull()) {
+                    continue;
+                }
+                JsonObject part = entry.getAsJsonObject("part");
+                String partName = part.has("name") ? part.get("name").getAsString() : null;
+                if (partName == null || partName.isEmpty()) {
+                    continue;
+                }
+                String mountnames = entry.has("mountnames")
+                        ? entry.get("mountnames").getAsString() : "";
+                for (String mount : mountnames.split(",")) {
+                    mount = mount.trim();
+                    if (!mount.isEmpty()) {
+                        result.put(mount, partName);
+                    }
+                }
+            }
+            if (arr.size() < 30) {
+                break;
+            }
+            page++;
+        }
+        return result;
+    }
+
+    @Override
+    public void syncBomEntries(String projectId,
+            Map<String, List<String>> partToMountnames) throws Exception {
+        if (readOnly) {
+            Logger.warn("PartDB is in read-only mode; skipping BOM sync for project {}", projectId);
+            return;
+        }
+
+        // Fetch current BOM: partName → {entryId}
+        Map<String, Integer> partNameToEntryId = new HashMap<>();
+        int page = 1;
+        while (true) {
+            String json = request("GET",
+                    "/api/projects/" + projectId + "/bom?itemsPerPage=30&page=" + page, null);
+            JsonArray arr = parseArray(json);
+            if (arr.size() == 0) {
+                break;
+            }
+            for (JsonElement el : arr) {
+                JsonObject entry = el.getAsJsonObject();
+                if (!entry.has("part") || entry.get("part").isJsonNull()) {
+                    continue;
+                }
+                int entryId = entry.get("id").getAsInt();
+                String partName = entry.getAsJsonObject("part").get("name").getAsString();
+                partNameToEntryId.put(partName, entryId);
+            }
+            if (arr.size() < 30) {
+                break;
+            }
+            page++;
+        }
+
+        for (Map.Entry<String, List<String>> e : partToMountnames.entrySet()) {
+            String partName = e.getKey();
+            List<String> mounts = e.getValue();
+            Integer entryId = partNameToEntryId.get(partName);
+            if (entryId == null) {
+                continue; // not in PartDB BOM, skip
+            }
+            if (mounts.isEmpty()) {
+                // No enabled placements left → delete BOM entry
+                request("DELETE", "/api/project_bom_entries/" + entryId, null);
+                Logger.info("PartDB: removed BOM entry for part '{}' (no enabled placements)",
+                        partName);
+            } else {
+                String mountStr = String.join(",", mounts);
+                double qty = mounts.size();
+                String body = "{\"mountnames\":" + jsonString(mountStr)
+                        + ",\"quantity\":" + qty + "}";
+                request("PATCH", "/api/project_bom_entries/" + entryId, body);
+                Logger.debug("PartDB: BOM entry for '{}' → mountnames='{}', qty={}",
+                        partName, mountStr, (int) qty);
+            }
+        }
+    }
+
+    /**
+     * Returns the PartDB attachment type ID for the given type name, creating
+     * the type in PartDB if it does not exist yet. Results are cached.
+     */
+    private int ensureAttachmentType(String typeName) throws Exception {
+        Integer cached = attachmentTypeIdCache.get(typeName);
+        if (cached != null) {
+            return cached;
+        }
+        // Search existing types
+        int page = 1;
+        while (true) {
+            String json = request("GET", "/api/attachment_types?itemsPerPage=30&page=" + page, null);
+            JsonArray arr = parseArray(json);
+            for (JsonElement el : arr) {
+                JsonObject t = el.getAsJsonObject();
+                if (t.has("name") && typeName.equals(t.get("name").getAsString())) {
+                    int id = t.get("id").getAsInt();
+                    attachmentTypeIdCache.put(typeName, id);
+                    return id;
+                }
+            }
+            if (arr.size() < 30) {
+                break;
+            }
+            page++;
+        }
+        // Not found — create it
+        String body = "{\"name\":" + jsonString(typeName) + "}";
+        String resp = request("POST", "/api/attachment_types", body);
+        int id = parseObject(resp).get("id").getAsInt();
+        attachmentTypeIdCache.put(typeName, id);
+        Logger.info("PartDB created attachment type '{}' with id={}", typeName, id);
+        return id;
     }
 
     // -------------------------------------------------------------------------
