@@ -389,14 +389,13 @@ public class PartsPanel extends JPanel implements WizardContainer {
                 super.getTableCellRendererComponent(tbl, value, selected, focus, viewRow, col);
                 setHorizontalAlignment(SwingConstants.RIGHT);
                 if (!selected) {
+                    boolean pending = false;
                     if (partDb != null) {
                         int modelRow = tbl.convertRowIndexToModel(viewRow);
                         Part rowPart = tableModel.getRowObjectAt(modelRow);
-                        if (rowPart != null && partDb.getPendingCount(rowPart.getId()) > 0) {
-                            setBackground(pendingColor);
-                            return this;
-                        }
+                        pending = rowPart != null && partDb.getPendingCount(rowPart.getId()) > 0;
                     }
+                    setBackground(pending ? pendingColor : tbl.getBackground());
                 }
                 return this;
             }

@@ -20,6 +20,7 @@
 package org.openpnp.machine.reference.feeder.wizards;
 
 import java.awt.Color;
+import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.image.BufferedImage;
@@ -38,6 +39,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.border.TitledBorder;
 
 import org.jdesktop.beansbinding.AutoBinding.UpdateStrategy;
@@ -61,6 +63,8 @@ import org.openpnp.gui.support.LengthConverter;
 import org.openpnp.gui.support.MessageBoxes;
 import org.openpnp.gui.support.MutableLocationProxy;
 import org.openpnp.gui.support.PartsComboBoxModel;
+import org.openpnp.gui.support.Icons;
+import org.openpnp.machine.reference.PartDbDatabase;
 import org.openpnp.machine.reference.camera.BufferedImageCamera;
 import org.openpnp.machine.reference.feeder.ReferenceStripFeeder;
 import org.openpnp.model.Board;
@@ -99,6 +103,13 @@ public class ReferenceStripFeederConfigurationWizard extends AbstractConfigurati
 
     private JComboBox comboBoxPart;
     private JLabel lblPartInfo;
+    private JLabel lblLot;
+    private JComboBox comboBoxLot;
+    private JPanel lotButtonsPanel;
+    private JButton btnLotMinus;
+    private JButton btnLotPlus;
+    private boolean isLoadingLots = false;
+    private SwingWorker<?, ?> lotLoadWorker;
     
     private JTextField textFieldFeedStartX;
     private JTextField textFieldFeedStartY;
@@ -158,7 +169,13 @@ public class ReferenceStripFeederConfigurationWizard extends AbstractConfigurati
                 FormSpecs.RELATED_GAP_COLSPEC,
                 FormSpecs.DEFAULT_COLSPEC,
                 FormSpecs.RELATED_GAP_COLSPEC,
-                ColumnSpec.decode("default:grow"),},
+                ColumnSpec.decode("default:grow"),
+                FormSpecs.RELATED_GAP_COLSPEC,
+                FormSpecs.DEFAULT_COLSPEC,
+                FormSpecs.RELATED_GAP_COLSPEC,
+                FormSpecs.DEFAULT_COLSPEC,
+                FormSpecs.RELATED_GAP_COLSPEC,
+                ColumnSpec.decode("left:default:grow"),},
             new RowSpec[] {
                 FormSpecs.RELATED_GAP_ROWSPEC,
                 FormSpecs.DEFAULT_ROWSPEC,
@@ -185,12 +202,50 @@ public class ReferenceStripFeederConfigurationWizard extends AbstractConfigurati
 
         comboBoxPart.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
-                updatePartInfo(e);            
+                updatePartInfo(e);
+                loadLots((Part) comboBoxPart.getSelectedItem());
             }
         });
-        
+
         lblPartInfo = new JLabel(" ");
         panelPart.add(lblPartInfo,"8, 2, left, default");
+
+        lblLot = new JLabel(Translations.getString("AbstractReferenceFeederConfigurationWizard.GeneralPanel.StockLotLabel.text")); //$NON-NLS-1$
+        lblLot.setVisible(false);
+        panelPart.add(lblLot, "10, 2, right, default");
+
+        comboBoxLot = new JComboBox();
+        comboBoxLot.addItem("Default");
+        comboBoxLot.setPrototypeDisplayValue("MMMMMMMMMMMMMM (999)");
+        comboBoxLot.setVisible(false);
+        comboBoxLot.addActionListener(e -> {
+            if (isLoadingLots) {
+                return;
+            }
+            notifyChange();
+            boolean hasLot = comboBoxLot.getSelectedItem() instanceof PartDbDatabase.PartDbLot;
+            btnLotMinus.setEnabled(hasLot);
+            btnLotPlus.setEnabled(hasLot);
+        });
+        panelPart.add(comboBoxLot, "12, 2, left, default");
+
+        btnLotPlus = new JButton(Icons.add);
+        btnLotPlus.setEnabled(false);
+        btnLotPlus.setToolTipText("Add 1 to this lot's stock");
+        btnLotPlus.addActionListener(e -> adjustLotStock(+1));
+
+        btnLotMinus = new JButton(Icons.delete);
+        btnLotMinus.setEnabled(false);
+        btnLotMinus.setToolTipText("Remove 1 from this lot's stock");
+        btnLotMinus.addActionListener(e -> adjustLotStock(-1));
+
+        lotButtonsPanel = new JPanel();
+        ((FlowLayout) lotButtonsPanel.getLayout()).setVgap(0);
+        ((FlowLayout) lotButtonsPanel.getLayout()).setHgap(2);
+        lotButtonsPanel.setVisible(false);
+        lotButtonsPanel.add(btnLotPlus);
+        lotButtonsPanel.add(btnLotMinus);
+        panelPart.add(lotButtonsPanel, "14, 2");
         
         lblRotationInTape = new JLabel(Translations.getString(
                 "ReferenceStripFeederConfigurationWizard.RotationInTapeLabel.text")); //$NON-NLS-1$
@@ -463,6 +518,8 @@ public class ReferenceStripFeederConfigurationWizard extends AbstractConfigurati
         addWrappedBinding(feeder, "part", comboBoxPart, "selectedItem");
         addWrappedBinding(feeder, "feedRetryCount", retryCountTf, "text", intConverter);
         addWrappedBinding(feeder, "pickRetryCount", pickRetryCount, "text", intConverter);
+
+        loadLots(feeder.getPart());
 
         addWrappedBinding(feeder, "tapeWidth", textFieldTapeWidth, "text", lengthConverter);
         addWrappedBinding(feeder, "partPitch", textFieldPartPitch, "text", lengthConverter);
@@ -1100,5 +1157,102 @@ public class ReferenceStripFeederConfigurationWizard extends AbstractConfigurati
 
     private void clearVisionCache() {
         feeder.resetVision();
+    }
+
+    @Override
+    protected void loadFromModel() {
+        super.loadFromModel();
+        loadLots(feeder.getPart());
+    }
+
+    @Override
+    protected void saveToModel() {
+        super.saveToModel();
+        Object sel = comboBoxLot.getSelectedItem();
+        feeder.setPartDbLotId(sel instanceof PartDbDatabase.PartDbLot
+                ? ((PartDbDatabase.PartDbLot) sel).id : -1);
+    }
+
+    private void loadLots(Part part) {
+        PartDbDatabase db = PartDbDatabase.getInstance();
+        isLoadingLots = true;
+        comboBoxLot.removeAllItems();
+        comboBoxLot.addItem("Default");
+        isLoadingLots = false;
+        if (db == null || !db.isEnabled() || !db.isConnected() || part == null) {
+            lblLot.setVisible(false);
+            comboBoxLot.setVisible(false);
+            lotButtonsPanel.setVisible(false);
+            return;
+        }
+        lblLot.setVisible(true);
+        comboBoxLot.setVisible(true);
+        lotButtonsPanel.setVisible(true);
+        btnLotMinus.setEnabled(false);
+        btnLotPlus.setEnabled(false);
+        comboBoxLot.setEnabled(false);
+        if (lotLoadWorker != null) {
+            lotLoadWorker.cancel(true);
+        }
+        lotLoadWorker = new SwingWorker<List<PartDbDatabase.PartDbLot>, Void>() {
+            @Override
+            protected List<PartDbDatabase.PartDbLot> doInBackground() throws Exception {
+                return db.fetchLotsForPart(part.getId());
+            }
+            @Override
+            protected void done() {
+                comboBoxLot.setEnabled(true);
+                try {
+                    isLoadingLots = true;
+                    for (PartDbDatabase.PartDbLot lot : get()) {
+                        comboBoxLot.addItem(lot);
+                    }
+                    int current = feeder.getPartDbLotId();
+                    if (current >= 0) {
+                        for (int i = 1; i < comboBoxLot.getItemCount(); i++) {
+                            Object item = comboBoxLot.getItemAt(i);
+                            if (item instanceof PartDbDatabase.PartDbLot
+                                    && ((PartDbDatabase.PartDbLot) item).id == current) {
+                                comboBoxLot.setSelectedIndex(i);
+                                break;
+                            }
+                        }
+                    }
+                    isLoadingLots = false;
+                    boolean hasLot = comboBoxLot.getSelectedItem() instanceof PartDbDatabase.PartDbLot;
+                    btnLotMinus.setEnabled(hasLot);
+                    btnLotPlus.setEnabled(hasLot);
+                }
+                catch (Exception ignored) {
+                    isLoadingLots = false;
+                }
+            }
+        };
+        lotLoadWorker.execute();
+    }
+
+    private void adjustLotStock(int delta) {
+        Object sel = comboBoxLot.getSelectedItem();
+        if (!(sel instanceof PartDbDatabase.PartDbLot)) {
+            return;
+        }
+        int lotId = ((PartDbDatabase.PartDbLot) sel).id;
+        PartDbDatabase db = PartDbDatabase.getInstance();
+        btnLotMinus.setEnabled(false);
+        btnLotPlus.setEnabled(false);
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                db.adjustStockByLotIdDelta(lotId, delta);
+                return null;
+            }
+            @Override
+            protected void done() {
+                try { get(); } catch (Exception e) {
+                    Logger.warn("PartDB: lot adjust failed: {}", e.getMessage());
+                }
+                loadLots((Part) comboBoxPart.getSelectedItem());
+            }
+        }.execute();
     }
 }

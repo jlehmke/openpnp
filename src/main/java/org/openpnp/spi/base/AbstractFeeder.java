@@ -54,6 +54,9 @@ public abstract class AbstractFeeder extends AbstractModelObject implements Feed
     @Attribute(required = false)
     protected int pickRetryCount = 3;
 
+    @Attribute(name = "partdb-lot-id", required = false)
+    private int partDbLotId = -1;
+
     protected Part part;
 
     public AbstractFeeder() {
@@ -114,6 +117,14 @@ public abstract class AbstractFeeder extends AbstractModelObject implements Feed
     @Override
     public Part getPart() {
         return part;
+    }
+
+    public int getPartDbLotId() { return partDbLotId; }
+
+    public void setPartDbLotId(int id) {
+        int old = partDbLotId;
+        partDbLotId = id;
+        firePropertyChange("partDbLotId", old, id);
     }
 
     @Override

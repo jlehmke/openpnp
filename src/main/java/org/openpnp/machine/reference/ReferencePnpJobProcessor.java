@@ -65,6 +65,7 @@ import org.openpnp.spi.PartDatabase;
 import org.openpnp.spi.PnpJobPlanner;
 import org.openpnp.spi.PnpJobPlanner.PlannedPlacement;
 import org.openpnp.spi.PnpJobProcessor.JobPlacement.Status;
+import org.openpnp.spi.base.AbstractFeeder;
 import org.openpnp.spi.base.AbstractJobProcessor;
 import org.openpnp.spi.base.AbstractPnpJobProcessor;
 import org.openpnp.spi.MotionPlanner.CompletionType;
@@ -1784,7 +1785,9 @@ public class ReferencePnpJobProcessor extends AbstractPnpJobProcessor {
                     trackDb = ((ReferenceMachine) Configuration.get().getMachine()).getPartDatabase();
                 }
                 if (trackDb != null) {
-                    trackDb.trackPlacement(part.getId());
+                    int lotId = (partsFeeder instanceof AbstractFeeder)
+                            ? ((AbstractFeeder) partsFeeder).getPartDbLotId() : -1;
+                    trackDb.trackPlacement(part.getId(), lotId);
                 }
             }
             catch (Exception e) {
