@@ -61,6 +61,15 @@ public interface PartDatabase extends WizardConfigurable, PropertySheetHolder {
     }
 
     /**
+     * Like {@link #trackPlacement(String)} but targets a specific stock lot.
+     * {@code lotId=-1} means use the part-level default lot. Default falls back to
+     * {@link #trackPlacement(String)} so existing implementations are unaffected.
+     */
+    default void trackPlacement(String partId, int lotId) throws Exception {
+        trackPlacement(partId);
+    }
+
+    /**
      * Called once when a job finishes. Implementations may auto-flush pending counts.
      * Default is a no-op.
      */

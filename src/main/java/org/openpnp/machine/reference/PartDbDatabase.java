@@ -191,6 +191,12 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
     /** Pending placement counts not yet flushed to PartDB: partId → count. */
     private final transient Map<String, Integer> pendingPlacements = new ConcurrentHashMap<>();
 
+    /** Pending feeder-specific lot placements not yet flushed to PartDB: lotId → count. */
+    private final transient Map<Integer, Integer> pendingLotPlacements = new ConcurrentHashMap<>();
+
+    /** Per-part display count of lot-specific pending placements (for UI highlighting). */
+    private final transient Map<String, Integer> pendingLotPlacementsDisplay = new ConcurrentHashMap<>();
+
     /** KiCad footprint refs selected by the user, to be written to eda_info on next push. */
     private final transient Map<String, String> pendingKicadFootprints = new ConcurrentHashMap<>();
 
@@ -201,12 +207,13 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
 
     /** Returns the number of pending (not yet flushed) placements for a part. */
     public int getPendingCount(String partId) {
-        return pendingPlacements.getOrDefault(partId, 0);
+        return pendingPlacements.getOrDefault(partId, 0)
+                + pendingLotPlacementsDisplay.getOrDefault(partId, 0);
     }
 
     /** Returns true if there are any pending placements waiting to be flushed. */
     public boolean hasPendingPlacements() {
-        return !pendingPlacements.isEmpty();
+        return !pendingPlacements.isEmpty() || !pendingLotPlacements.isEmpty();
     }
 
     /** -1 = idle, 0..N = refresh in progress (current index out of total). */
@@ -348,6 +355,20 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
     }
 
     @Override
+    public void trackPlacement(String partId, int lotId) throws Exception {
+        if (!connected || !trackPlacements) {
+            return;
+        }
+        if (lotId >= 0) {
+            pendingLotPlacements.merge(lotId, 1, Integer::sum);
+            pendingLotPlacementsDisplay.merge(partId, 1, Integer::sum);
+        } else {
+            pendingPlacements.merge(partId, 1, Integer::sum);
+        }
+        firePropertyChange("pendingPlacements", null, pendingPlacements);
+    }
+
+    @Override
     public void onJobFinished() throws Exception {
         if (!disableAutoFlushOnJobFinish) {
             flushPlacements();
@@ -356,7 +377,7 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
 
     @Override
     public void flushPlacements() throws Exception {
-        if (!connected || pendingPlacements.isEmpty()) {
+        if (!connected || (pendingPlacements.isEmpty() && pendingLotPlacements.isEmpty())) {
             return;
         }
         if (readOnly) {
@@ -372,10 +393,20 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
                 Logger.warn("PartDB: could not flush stock for '{}': {}", entry.getKey(), e.getMessage());
             }
         }
+        Map<Integer, Integer> lotsToFlush = new HashMap<>(pendingLotPlacements);
+        pendingLotPlacements.clear();
+        pendingLotPlacementsDisplay.clear();
+        for (Map.Entry<Integer, Integer> entry : lotsToFlush.entrySet()) {
+            try {
+                adjustStockByLotId(entry.getKey(), entry.getValue());
+            } catch (Exception e) {
+                Logger.warn("PartDB: could not flush lot {} stock: {}", entry.getKey(), e.getMessage());
+            }
+        }
         // Refresh cache first so the table shows the new value and loses yellow simultaneously.
         refreshStockLevels();
         firePropertyChange("pendingPlacements", null, pendingPlacements);
-        Logger.info("PartDB: flushed stock for {} part(s)", toFlush.size());
+        Logger.info("PartDB: flushed stock for {} part(s), {} lot(s)", toFlush.size(), lotsToFlush.size());
     }
 
     /** Adjusts the amount of a specific lot by delta (positive = add, negative = remove).
@@ -425,6 +456,52 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         patch.addProperty("amount", updated);
         request("PATCH", "/api/part_lots/" + lotId, patch.toString());
         Logger.info("PartDB: stock '{}' {} → {} (placed {})", partName, current, updated, count);
+    }
+
+    private void adjustStockByLotId(int lotId, int count) throws Exception {
+        adjustStockByLotIdDelta(lotId, -count);
+    }
+
+    /** Adjusts stock for the given lot by delta (positive = add, negative = remove). */
+    public void adjustStockByLotIdDelta(int lotId, int delta) throws Exception {
+        JsonObject lot = parseObject(request("GET", "/api/part_lots/" + lotId, null));
+        int current = lot.get("amount").getAsBigDecimal().intValue();
+        int updated = Math.max(0, current + delta);
+        JsonObject patch = new JsonObject();
+        patch.addProperty("amount", updated);
+        request("PATCH", "/api/part_lots/" + lotId, patch.toString());
+        Logger.info("PartDB: lot {} stock {} → {} (delta {})", lotId, current, updated, delta);
+    }
+
+    /**
+     * Fetches all stock lots for the given OpenPnP part ID from PartDB.
+     * Used by feeder wizards to populate the lot selection dropdown.
+     */
+    public List<PartDbLot> fetchLotsForPart(String partId) throws Exception {
+        JsonObject partData = findPartByName(partId);
+        int partDbId = partData.get("id").getAsInt();
+        // Fetch the full part detail — lots are embedded as "partLots" in the part object.
+        JsonObject detail = parseObject(request("GET", "/api/parts/" + partDbId, null));
+        List<PartDbLot> lots = new ArrayList<>();
+        if (!detail.has("partLots") || !detail.get("partLots").isJsonArray()) {
+            return lots;
+        }
+        for (JsonElement el : detail.getAsJsonArray("partLots")) {
+            JsonObject l = el.getAsJsonObject();
+            int id = l.get("id").getAsInt();
+            String desc = l.has("description") ? l.get("description").getAsString() : "";
+            int amount = l.has("amount") ? l.get("amount").getAsBigDecimal().intValue() : 0;
+            String storagePath = "";
+            if (l.has("storage_location") && !l.get("storage_location").isJsonNull()
+                    && l.get("storage_location").isJsonObject()) {
+                JsonObject sl = l.getAsJsonObject("storage_location");
+                String fp = sl.has("full_path") ? sl.get("full_path").getAsString() : "";
+                String nm = sl.has("name") ? sl.get("name").getAsString() : "";
+                storagePath = !fp.isEmpty() ? fp : nm;
+            }
+            lots.add(new PartDbLot(id, desc, storagePath, amount));
+        }
+        return lots;
     }
 
     @Override
@@ -539,6 +616,14 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
             this.description = description;
             this.storageLocation = storageLocation;
             this.amount = amount;
+        }
+
+        @Override
+        public String toString() {
+            String label = description.isEmpty() ? "#" + id : description;
+            return storageLocation.isEmpty()
+                    ? label + " (" + amount + ")"
+                    : label + " @ " + storageLocation + " (" + amount + ")";
         }
     }
 
