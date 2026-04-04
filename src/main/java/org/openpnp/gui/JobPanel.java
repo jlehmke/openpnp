@@ -421,8 +421,10 @@ public class JobPanel extends JPanel {
                 menu.addSeparator();
                 menu.add(new JMenuItem(addNewPanelAction));
                 menu.add(new JMenuItem(addExistingPanelAction));
-                menu.addSeparator();
-                menu.add(new JMenuItem(addFromDatabaseAction));
+                if (PartDbDatabase.getProjectStorage() != null) {
+                    menu.addSeparator();
+                    menu.add(new JMenuItem(addFromDatabaseAction));
+                }
                 menu.show(btnAddBoard, (int) btnAddBoard.getWidth(), (int) btnAddBoard.getHeight());
             }
         });
