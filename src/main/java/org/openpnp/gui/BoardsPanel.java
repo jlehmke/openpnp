@@ -61,6 +61,7 @@ import javax.swing.event.TableModelEvent;
 import javax.swing.event.TableModelListener;
 import javax.swing.table.TableRowSorter;
 
+import org.openpnp.ConfigurationListener;
 import org.openpnp.Translations;
 import org.openpnp.events.PlacementsHolderLocationSelectedEvent;
 import org.pmw.tinylog.Logger;
@@ -106,6 +107,11 @@ public class BoardsPanel extends JPanel {
     private ActionGroup partDbSelectionActionGroup;
 
     private JProgressBar importProgressBar;
+
+    private Component partDbSeparator;
+    private JButton btnImportFromPartDb;
+    private JButton btnPullFromPartDb;
+    private JButton btnPushToPartDb;
 
     private JPanel pnlPlacements;
     
@@ -296,17 +302,18 @@ public class BoardsPanel extends JPanel {
         btnCopyBoard.setHideActionText(true);
         toolBarBoards.add(btnCopyBoard);
 
-        toolBarBoards.addSeparator();
+        partDbSeparator = new JToolBar.Separator();
+        toolBarBoards.add(partDbSeparator);
 
-        JButton btnImportFromPartDb = new JButton(importBoardFromProjectAction);
+        btnImportFromPartDb = new JButton(importBoardFromProjectAction);
         btnImportFromPartDb.setHideActionText(true);
         toolBarBoards.add(btnImportFromPartDb);
 
-        JButton btnPullFromPartDb = new JButton(pullBoardFromPartDbAction);
+        btnPullFromPartDb = new JButton(pullBoardFromPartDbAction);
         btnPullFromPartDb.setHideActionText(true);
         toolBarBoards.add(btnPullFromPartDb);
 
-        JButton btnPushToPartDb = new JButton(pushBoardToPartDbAction);
+        btnPushToPartDb = new JButton(pushBoardToPartDbAction);
         btnPushToPartDb.setHideActionText(true);
         toolBarBoards.add(btnPushToPartDb);
 
@@ -328,9 +335,31 @@ public class BoardsPanel extends JPanel {
         
         add(splitPane);
 
+        configuration.addListener(new ConfigurationListener.Adapter() {
+            @Override
+            public void configurationComplete(Configuration cfg) {
+                SwingUtilities.invokeLater(() -> {
+                    updatePartDbVisibility();
+                    PartDbDatabase db = PartDbDatabase.getInstance();
+                    if (db != null) {
+                        db.addPropertyChangeListener("enabled", evt ->
+                                SwingUtilities.invokeLater(() -> updatePartDbVisibility()));
+                    }
+                });
+            }
+        });
+
         Configuration.get().getBus().register(this);
     }
-    
+
+    private void updatePartDbVisibility() {
+        boolean enabled = PartDbDatabase.getProjectStorage() != null;
+        partDbSeparator.setVisible(enabled);
+        btnImportFromPartDb.setVisible(enabled);
+        btnPullFromPartDb.setVisible(enabled);
+        btnPushToPartDb.setVisible(enabled);
+    }
+
     public JTable getFiducialLocatableLocationsTable() {
         return boardsTable;
     }

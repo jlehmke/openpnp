@@ -70,6 +70,7 @@ import javax.swing.event.ListSelectionListener;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableRowSorter;
 
+import org.openpnp.ConfigurationListener;
 import org.openpnp.Translations;
 import org.openpnp.gui.components.AutoSelectTextTable;
 import org.openpnp.machine.reference.PartDbDatabase;
@@ -130,6 +131,10 @@ public class PartsPanel extends JPanel implements WizardContainer {
     private TableColumn stockColumn;
     private JButton flushStockBtn;
     private JProgressBar stockRefreshBar;
+    private Component partDbSeparator;
+    private JButton btnImportFromPartDb;
+    private JButton btnUpdateFromPartDb;
+    private JButton btnPushToPartDb;
 
     public PartsPanel(Configuration configuration, Frame frame) {
         this.configuration = configuration;
@@ -270,10 +275,11 @@ public class PartsPanel extends JPanel implements WizardContainer {
         btnNewButton_1.setHideActionText(true);
         toolBar.add(btnNewButton_1);
 
-        toolBar.addSeparator();
-        toolBar.add(importFromPartDbAction);
-        toolBar.add(updateFromPartDbAction);
-        toolBar.add(pushToPartDbAction);
+        partDbSeparator = new JToolBar.Separator();
+        toolBar.add(partDbSeparator);
+        btnImportFromPartDb = (JButton) toolBar.add(importFromPartDbAction);
+        btnUpdateFromPartDb = (JButton) toolBar.add(updateFromPartDbAction);
+        btnPushToPartDb = (JButton) toolBar.add(pushToPartDbAction);
         flushStockBtn = new JButton(Icons.partDbSync);
         flushStockBtn.setToolTipText("Sync stock: push pending placements and refresh from database");
         flushStockBtn.setVisible(false);
@@ -335,7 +341,28 @@ public class PartsPanel extends JPanel implements WizardContainer {
         // the machine is available (deferred so configuration is fully loaded).
         stockColumn = table.getColumnModel().getColumn(10);
         table.removeColumn(stockColumn);
+        configuration.addListener(new ConfigurationListener.Adapter() {
+            @Override
+            public void configurationComplete(Configuration cfg) {
+                SwingUtilities.invokeLater(() -> {
+                    updatePartDbVisibility();
+                    PartDbDatabase db = PartDbDatabase.getInstance();
+                    if (db != null) {
+                        db.addPropertyChangeListener("enabled", evt ->
+                                SwingUtilities.invokeLater(() -> updatePartDbVisibility()));
+                    }
+                });
+            }
+        });
         SwingUtilities.invokeLater(this::setupPartDbStockColumn);
+    }
+
+    private void updatePartDbVisibility() {
+        boolean enabled = PartDbDatabase.getProjectStorage() != null;
+        partDbSeparator.setVisible(enabled);
+        btnImportFromPartDb.setVisible(enabled);
+        btnUpdateFromPartDb.setVisible(enabled);
+        btnPushToPartDb.setVisible(enabled);
     }
 
     private boolean stockColumnShown = false;

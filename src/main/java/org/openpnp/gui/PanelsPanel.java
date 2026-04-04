@@ -64,6 +64,7 @@ import javax.swing.table.TableRowSorter;
 
 import javax.swing.JOptionPane;
 
+import org.openpnp.ConfigurationListener;
 import org.openpnp.Translations;
 import org.openpnp.events.PlacementsHolderLocationSelectedEvent;
 import org.openpnp.events.PlacementsHolderSelectedEvent;
@@ -109,6 +110,11 @@ public class PanelsPanel extends JPanel {
     private ActionGroup multiSelectionActionGroup;
     private ActionGroup partDbSelectionActionGroup;
     private JProgressBar importProgressBar;
+
+    private Component partDbSeparator;
+    private JButton btnImportFromPartDb;
+    private JButton btnPullFromPartDb;
+    private JButton btnPushToPartDb;
 
     private Preferences prefs = Preferences.userNodeForPackage(PanelsPanel.class);
 
@@ -313,17 +319,18 @@ public class PanelsPanel extends JPanel {
         btnCopyPanel.setHideActionText(true);
         toolBarPanels.add(btnCopyPanel);
 
-        toolBarPanels.addSeparator();
+        partDbSeparator = new JToolBar.Separator();
+        toolBarPanels.add(partDbSeparator);
 
-        JButton btnImportFromPartDb = new JButton(importPanelFromProjectAction);
+        btnImportFromPartDb = new JButton(importPanelFromProjectAction);
         btnImportFromPartDb.setHideActionText(true);
         toolBarPanels.add(btnImportFromPartDb);
 
-        JButton btnPullFromPartDb = new JButton(pullPanelFromPartDbAction);
+        btnPullFromPartDb = new JButton(pullPanelFromPartDbAction);
         btnPullFromPartDb.setHideActionText(true);
         toolBarPanels.add(btnPullFromPartDb);
 
-        JButton btnPushToPartDb = new JButton(pushPanelToPartDbAction);
+        btnPushToPartDb = new JButton(pushPanelToPartDbAction);
         btnPushToPartDb.setHideActionText(true);
         toolBarPanels.add(btnPushToPartDb);
 
@@ -342,9 +349,31 @@ public class PanelsPanel extends JPanel {
         add(splitPane);
         
 
+        configuration.addListener(new ConfigurationListener.Adapter() {
+            @Override
+            public void configurationComplete(Configuration cfg) {
+                SwingUtilities.invokeLater(() -> {
+                    updatePartDbVisibility();
+                    PartDbDatabase db = PartDbDatabase.getInstance();
+                    if (db != null) {
+                        db.addPropertyChangeListener("enabled", evt ->
+                                SwingUtilities.invokeLater(() -> updatePartDbVisibility()));
+                    }
+                });
+            }
+        });
+
         Configuration.get().getBus().register(this);
     }
-    
+
+    private void updatePartDbVisibility() {
+        boolean enabled = PartDbDatabase.getProjectStorage() != null;
+        partDbSeparator.setVisible(enabled);
+        btnImportFromPartDb.setVisible(enabled);
+        btnPullFromPartDb.setVisible(enabled);
+        btnPushToPartDb.setVisible(enabled);
+    }
+
     public JTable getPanelsTable() {
         return panelsTable;
     }

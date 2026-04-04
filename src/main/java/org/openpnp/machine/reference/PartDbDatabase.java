@@ -283,11 +283,20 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
      * none is configured or connected. Convenience helper for GUI classes.
      */
     public static ProjectStorage getProjectStorage() {
+        PartDbDatabase db = getInstance();
+        return (db != null && db.isEnabled()) ? db : null;
+    }
+
+    /**
+     * Returns the configured {@link PartDbDatabase} instance regardless of its enabled state,
+     * or {@code null} if none is configured.
+     */
+    public static PartDbDatabase getInstance() {
         org.openpnp.spi.Machine machine = Configuration.get().getMachine();
         if (machine instanceof ReferenceMachine) {
             org.openpnp.spi.PartDatabase db = ((ReferenceMachine) machine).getPartDatabase();
-            if (db instanceof ProjectStorage) {
-                return (ProjectStorage) db;
+            if (db instanceof PartDbDatabase) {
+                return (PartDbDatabase) db;
             }
         }
         return null;
