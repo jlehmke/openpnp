@@ -56,6 +56,8 @@ import org.openpnp.gui.support.Helpers;
 import org.openpnp.gui.support.Icons;
 import org.openpnp.gui.support.IntegerConverter;
 import org.openpnp.gui.tablemodel.FootprintTableModel;
+import org.openpnp.machine.reference.vision.AbstractPartAlignment;
+import org.openpnp.model.BottomVisionSettings;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.Footprint;
 import org.openpnp.model.Footprint.Generator;
@@ -111,6 +113,8 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
                 new RowSpec[] {
                         FormSpecs.RELATED_GAP_ROWSPEC,
                         RowSpec.decode("default:grow"),
+                        FormSpecs.RELATED_GAP_ROWSPEC,
+                        FormSpecs.DEFAULT_ROWSPEC,
                         FormSpecs.RELATED_GAP_ROWSPEC,
                         FormSpecs.DEFAULT_ROWSPEC,
                         FormSpecs.RELATED_GAP_ROWSPEC,
@@ -205,6 +209,20 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
         propertiesPanel.add(padRoundness, "14, 8, fill, default");
         padRoundness.setColumns(10);
 
+        JLabel lblOverallWidth = new JLabel(Translations.getString("PackageVisionWizard.SettingsPanel.OverallWidthLabel.text")); //$NON-NLS-1$
+        propertiesPanel.add(lblOverallWidth, "2, 8, right, default");
+
+        overallWidthTf = new JTextField();
+        propertiesPanel.add(overallWidthTf, "4, 8, left, default");
+        overallWidthTf.setColumns(10);
+
+        JLabel lblOverallHeight = new JLabel(Translations.getString("PackageVisionWizard.SettingsPanel.OverallLengthLabel.text")); //$NON-NLS-1$
+        propertiesPanel.add(lblOverallHeight, "2, 10, right, default");
+
+        overallHeightTf = new JTextField();
+        propertiesPanel.add(overallHeightTf, "4, 10, left, default");
+        overallHeightTf.setColumns(10);
+
         JPanel tablePanel = new JPanel();
         add(tablePanel, BorderLayout.CENTER);
         tablePanel.setBorder(new TitledBorder(null, Translations.getString(
@@ -269,7 +287,18 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
             return;
         }
         cameraView.removeReticle(PackageVisionWizard.class.getName());
-        Reticle reticle = new FootprintReticle(footprint);
+        FootprintReticle reticle = new FootprintReticle(footprint);
+        // On the bottom camera, replace pads with estimated (pin-geometry) pads when configured.
+        // On the top camera, show original landing pads for PCB placement reference.
+        if (camera.getLooking() == Camera.Looking.Up) {
+            BottomVisionSettings bvs = AbstractPartAlignment.getInheritedVisionSettings(pkg, true);
+            if (bvs != null) {
+                Footprint estimated = bvs.getEstimatedFootprint(footprint);
+                if (estimated != null) {
+                    reticle.setEstimatedFootprint(estimated);
+                }
+            }
+        }
         cameraView.setReticle(PackageVisionWizard.class.getName(), reticle);
     }
 
@@ -417,6 +446,8 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
 
     private JTextField bodyWidthTf;
     private JTextField bodyHeightTf;
+    private JTextField overallWidthTf;
+    private JTextField overallHeightTf;
     private JComboBox unitsCombo;
     private JTextField padCount;
     private JTextField padAcross;
@@ -433,6 +464,8 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
         bind(UpdateStrategy.READ_WRITE, footprint, "units", unitsCombo, "selectedItem");
         bind(UpdateStrategy.READ_WRITE, footprint, "bodyWidth", bodyWidthTf, "text", doubleConverter);
         bind(UpdateStrategy.READ_WRITE, footprint, "bodyHeight", bodyHeightTf, "text", doubleConverter);
+        bind(UpdateStrategy.READ_WRITE, footprint, "overallWidth", overallWidthTf, "text", doubleConverter);
+        bind(UpdateStrategy.READ_WRITE, footprint, "overallHeight", overallHeightTf, "text", doubleConverter);
         bind(UpdateStrategy.READ_WRITE, footprint, "outerDimension", outerDimension, "text", doubleConverter);
         bind(UpdateStrategy.READ_WRITE, footprint, "innerDimension", innerDimension, "text");
         bind(UpdateStrategy.READ_WRITE, footprint, "padCount", padCount, "text", intConverter);
@@ -442,6 +475,8 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
 
         ComponentDecorators.decorateWithAutoSelect(bodyWidthTf);
         ComponentDecorators.decorateWithAutoSelect(bodyHeightTf);
+        ComponentDecorators.decorateWithAutoSelect(overallWidthTf);
+        ComponentDecorators.decorateWithAutoSelect(overallHeightTf);
 
         ComponentDecorators.decorateWithAutoSelect(outerDimension);
         ComponentDecorators.decorateWithAutoSelect(innerDimension);

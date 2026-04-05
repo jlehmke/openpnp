@@ -19,8 +19,10 @@
 
 package org.openpnp.gui.components.reticle;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.Shape;
@@ -33,10 +35,15 @@ import org.openpnp.model.LengthUnit;
 public class FootprintReticle implements Reticle {
     private Color color;
     private Footprint footprint;
+    private Footprint estimatedFootprint;
 
     public FootprintReticle(Footprint footprint) {
         this.footprint = footprint;
         this.color = Color.yellow;
+    }
+
+    public void setEstimatedFootprint(Footprint estimatedFootprint) {
+        this.estimatedFootprint = estimatedFootprint;
     }
 
     @Override
@@ -88,6 +95,17 @@ public class FootprintReticle implements Reticle {
         if (bodyShape != null) {
             g2d.setColor(Color.green);
             g2d.draw(tx.createTransformedShape(bodyShape));
+        }
+
+        // Draw estimated (pin-geometry) pads as a semi-transparent purple fill.
+        if (estimatedFootprint != null) {
+            Composite saved = g2d.getComposite();
+            g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f));
+            g2d.setColor(new Color(148, 0, 211));
+            for (Footprint.Pad pad : estimatedFootprint.getPads()) {
+                g2d.fill(tx.createTransformedShape(pad.getShape()));
+            }
+            g2d.setComposite(saved);
         }
     }
 }

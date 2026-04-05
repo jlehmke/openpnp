@@ -62,6 +62,8 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
     private JComboBox comboBoxPreRotate;
     private JComboBox comboBoxCheckPartSizeMethod;
     private JTextField textPartSizeTolerance;
+    private JCheckBox chckbxCutToBodySize;
+    private JTextField textPadShrinkPercent;
     private JComboBox comboBoxMaxRotation;
     private JTextField tfBottomVisionOffsetX;
     private JTextField tfBottomVisionOffsetY;
@@ -263,6 +265,20 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         textPartSizeTolerance = new JTextField();
         panel.add(textPartSizeTolerance, "8, 12, fill, default");
 
+        JLabel lblCutToBodySize = new JLabel(Translations.getString(
+                "BottomVisionSettingsConfigurationWizard.CutToBodySizeLabel.text")); //$NON-NLS-1$
+        panel.add(lblCutToBodySize, "2, 14, right, default");
+
+        chckbxCutToBodySize = new JCheckBox();
+        panel.add(chckbxCutToBodySize, "4, 14");
+
+        JLabel lblPadShrinkPercent = new JLabel(Translations.getString(
+                "BottomVisionSettingsConfigurationWizard.PadShrinkPercentLabel.text")); //$NON-NLS-1$
+        panel.add(lblPadShrinkPercent, "6, 14, right, default");
+
+        textPadShrinkPercent = new JTextField();
+        panel.add(textPadShrinkPercent, "8, 14, fill, default");
+
         pipelinePanel = new PipelineControls() {
 
             @Override
@@ -301,7 +317,7 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         };
         pipelinePanel.setResetable(true);
         pipelinePanel.setEditable(true);
-        panel.add(pipelinePanel, "1, 14, 14, 1, fill, fill");
+        panel.add(pipelinePanel, "1, 16, 14, 1, fill, fill");
 
         JPanel panelAlign = new JPanel();
         contentPanel.add(panelAlign);
@@ -445,6 +461,8 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         addWrappedBinding(visionSettings, "preRotateUsage", comboBoxPreRotate, "selectedItem");
         addWrappedBinding(visionSettings, "checkPartSizeMethod", comboBoxCheckPartSizeMethod, "selectedItem");
         addWrappedBinding(visionSettings, "checkSizeTolerancePercent", textPartSizeTolerance, "text", intConverter);
+        addWrappedBinding(visionSettings, "cutToBodySize", chckbxCutToBodySize, "selected");
+        addWrappedBinding(visionSettings, "padShrinkPercent", textPadShrinkPercent, "text", intConverter);
         addWrappedBinding(visionSettings, "maxRotation", comboBoxMaxRotation, "selectedItem");
         addWrappedBinding(visionSettings, "asymmetric", asymmetric, "selected");
         MutableLocationProxy bottomVisionOffsetProxy = new MutableLocationProxy();
@@ -458,6 +476,7 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
         addWrappedBinding(visionSettings, "pipelineParameterAssignments", pipelinePanel, "pipelineParameterAssignments");
 
         ComponentDecorators.decorateWithAutoSelect(textPartSizeTolerance);
+        ComponentDecorators.decorateWithAutoSelect(textPadShrinkPercent);
         //ComponentDecorators.decorateWithAutoSelect(testAlignmentAngle);
         ComponentDecorators.decorateWithAutoSelectAndLengthConversion(tfBottomVisionOffsetX);
         ComponentDecorators.decorateWithAutoSelectAndLengthConversion(tfBottomVisionOffsetY);
@@ -485,6 +504,8 @@ public class BottomVisionSettingsConfigurationWizard extends AbstractConfigurati
                 FormSpecs.RELATED_GAP_COLSPEC,
                 ColumnSpec.decode("default:grow"),},
             new RowSpec[] {
+                FormSpecs.RELATED_GAP_ROWSPEC,
+                FormSpecs.DEFAULT_ROWSPEC,
                 FormSpecs.RELATED_GAP_ROWSPEC,
                 FormSpecs.DEFAULT_ROWSPEC,
                 FormSpecs.RELATED_GAP_ROWSPEC,

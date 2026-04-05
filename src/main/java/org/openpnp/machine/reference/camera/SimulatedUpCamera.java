@@ -16,6 +16,8 @@ import java.util.ConcurrentModificationException;
 import org.openpnp.Translations;
 import org.openpnp.gui.support.Wizard;
 import org.openpnp.machine.reference.SimulationModeMachine;
+import org.openpnp.machine.reference.vision.AbstractPartAlignment;
+import org.openpnp.model.BottomVisionSettings;
 import org.openpnp.machine.reference.camera.wizards.SimulatedUpCameraConfigurationWizard;
 import org.openpnp.machine.reference.solutions.CameraSolutions;
 import org.openpnp.model.AxesLocation;
@@ -222,9 +224,20 @@ public class SimulatedUpCamera extends ReferenceCamera {
                     0, 0, partHeightMm, 0));
             offsets = partUndersideLocation.subtractWithRotation(getSimulatedLocation());
 
+            // Use estimated (shrunk/clipped) pad geometry when configured, to simulate
+            // what the actual component pin/lead area looks like to the bottom camera.
+            Footprint padsFootprint = footprint;
+            BottomVisionSettings bvs = AbstractPartAlignment.getInheritedVisionSettings(pkg, true);
+            if (bvs != null) {
+                Footprint estimated = bvs.getEstimatedFootprint(footprint);
+                if (estimated != null) {
+                    padsFootprint = estimated;
+                }
+            }
+
             // Transform footprint shapes to right-hand coordinate system.
             Shape bodyShape = footprint.getBodyShape();
-            Shape padsShape = footprint.getPadsShape();
+            Shape padsShape = padsFootprint.getPadsShape();
             AffineTransform txShape = new AffineTransform();
             txShape.scale(unitScale, unitScale);
             padsShape = txShape.createTransformedShape(padsShape);

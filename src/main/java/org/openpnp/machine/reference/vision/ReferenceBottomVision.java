@@ -23,6 +23,7 @@ import org.openpnp.model.AbstractModelObject;
 import org.openpnp.model.AbstractVisionSettings;
 import org.openpnp.model.BoardLocation;
 import org.openpnp.model.BottomVisionSettings;
+import org.openpnp.model.Footprint;
 import org.openpnp.model.Configuration;
 import org.openpnp.model.Length;
 import org.openpnp.model.LengthUnit;
@@ -478,8 +479,14 @@ public class ReferenceBottomVision extends AbstractPartAlignment {
             Location upp = camera.getUnitsPerPixelAtZ();
             pipeline.setProperty("camera", camera);
             Length samplingSize = new Length(0.1, LengthUnit.Millimeters); // Default, if no setting on nozzle tip. 
-            // Set the footprint.
-            pipeline.setProperty("footprint", composite.getFootprint());
+            // Set the footprint: use estimated (shrunk/clipped) pads when configured, to match
+            // the actual pin/lead geometry rather than the landing pad outline.
+            Footprint pipelineFootprint = composite.getFootprint();
+            Footprint estimatedFootprint = bottomVisionSettings.getEstimatedFootprint(pipelineFootprint);
+            if (estimatedFootprint != null) {
+                pipelineFootprint = estimatedFootprint;
+            }
+            pipeline.setProperty("footprint", pipelineFootprint);
             pipeline.setProperty("footprint.rotation", wantedLocation.getRotation());
             pipeline.setProperty("footprint.xOffset", new Length(shot.getX(), composite.getUnits()));
             pipeline.setProperty("footprint.yOffset", new Length(shot.getY(), composite.getUnits()));
