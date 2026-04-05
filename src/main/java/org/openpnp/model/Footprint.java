@@ -50,6 +50,14 @@ public class Footprint extends AbstractModelObject{
     @Attribute(required = false)
     private double bodyHeight;
 
+    /** Overall width (X) of the component as placed, e.g. lead-tip to lead-tip. Used to crop estimated pads. */
+    @Attribute(required = false)
+    private double overallWidth;
+
+    /** Overall length (Y) of the component as placed. Used to crop estimated pads. */
+    @Attribute(required = false)
+    private double overallHeight;
+
     @Attribute(required = false)
     private double outerDimension;
 
@@ -159,6 +167,26 @@ public class Footprint extends AbstractModelObject{
         Object oldValue = this.bodyHeight;
         this.bodyHeight = bodyHeight;
         firePropertyChange("bodyHeight", oldValue, bodyHeight);
+    }
+
+    public double getOverallWidth() {
+        return overallWidth;
+    }
+
+    public void setOverallWidth(double overallWidth) {
+        Object oldValue = this.overallWidth;
+        this.overallWidth = overallWidth;
+        firePropertyChange("overallWidth", oldValue, overallWidth);
+    }
+
+    public double getOverallHeight() {
+        return overallHeight;
+    }
+
+    public void setOverallHeight(double overallHeight) {
+        Object oldValue = this.overallHeight;
+        this.overallHeight = overallHeight;
+        firePropertyChange("overallHeight", oldValue, overallHeight);
     }
 
 

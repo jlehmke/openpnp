@@ -42,6 +42,8 @@ import java.util.List;
 import javax.swing.JComponent;
 import javax.swing.UIManager;
 
+import org.openpnp.machine.reference.vision.AbstractPartAlignment;
+import org.openpnp.model.BottomVisionSettings;
 import org.openpnp.model.Footprint;
 import org.openpnp.model.LengthUnit;
 import org.openpnp.model.Location;
@@ -118,11 +120,19 @@ public class VisionCompositingPreview extends JComponent implements MouseMotionL
             tx.scale(scale, -scale); // to left-hand coordinate system for Graphics2D
             g2d.setTransform(tx);
 
+            // Use estimated (shrunk/clipped) pad geometry when configured, to simulate
+            // what the actual component pin/lead area looks like to the bottom camera.
+            BottomVisionSettings bvs = AbstractPartAlignment.getInheritedVisionSettings(pkg, true);
+            Footprint estimatedFootprint = bvs != null ? bvs.getEstimatedFootprint(footprint) : null;
+            Shape renderPadsShape = estimatedFootprint != null
+                    ? estimatedFootprint.getPadsShape()
+                    : padsShape;
+
             // Draw the package.
             g2d.setColor(Color.darkGray);
             g2d.fill(bodyShape);
             g2d.setColor(Color.white);
-            g2d.fill(padsShape);
+            g2d.fill(renderPadsShape);
 
             // Draw fused pads.
             if (pressedMouse && composite.getRectifiedPads() != null) {
