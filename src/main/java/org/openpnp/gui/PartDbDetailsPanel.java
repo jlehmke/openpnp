@@ -57,13 +57,16 @@ import org.pmw.tinylog.Logger;
 @SuppressWarnings("serial")
 public class PartDbDetailsPanel extends JPanel {
 
-    private static final int ROW_HEIGHT      = 0;
-    private static final int ROW_BODY_WIDTH  = 1;
-    private static final int ROW_BODY_LENGTH = 2;
-    private static final int ROW_COUNT       = 3;
+    private static final int ROW_HEIGHT         = 0;
+    private static final int ROW_BODY_WIDTH     = 1;
+    private static final int ROW_BODY_LENGTH    = 2;
+    private static final int ROW_OVERALL_WIDTH  = 3;
+    private static final int ROW_OVERALL_LENGTH = 4;
+    private static final int ROW_COUNT          = 5;
 
     private static final String[] ROW_NAMES = {
-        "Height (mm)", "Body Width (mm)", "Body Length (mm)"
+        "Height (mm)", "Body Width (mm)", "Body Length (mm)",
+        "Overall Width (mm)", "Overall Length (mm)"
     };
 
     private static final int IMG_SIZE = 80;
@@ -657,6 +660,18 @@ public class PartDbDetailsPanel extends JPanel {
                 }
                 double bl = part.getPackage().getFootprint().getBodyHeight();
                 return bl > 0 ? fmt(bl) : "";
+            case ROW_OVERALL_WIDTH:
+                if (part.getPackage() == null) {
+                    return "";
+                }
+                double ow = part.getPackage().getFootprint().getOverallWidth();
+                return ow > 0 ? fmt(ow) : "";
+            case ROW_OVERALL_LENGTH:
+                if (part.getPackage() == null) {
+                    return "";
+                }
+                double ol = part.getPackage().getFootprint().getOverallHeight();
+                return ol > 0 ? fmt(ol) : "";
             default:
                 return "";
         }
@@ -667,10 +682,12 @@ public class PartDbDetailsPanel extends JPanel {
             return "";
         }
         switch (row) {
-            case ROW_HEIGHT:      return fmm(rawData.partHeight);
-            case ROW_BODY_WIDTH:  return fmm(rawData.partBodyWidth);
-            case ROW_BODY_LENGTH: return fmm(rawData.partBodyLength);
-            default:              return "";
+            case ROW_HEIGHT:         return fmm(rawData.partHeight);
+            case ROW_BODY_WIDTH:     return fmm(rawData.partBodyWidth);
+            case ROW_BODY_LENGTH:    return fmm(rawData.partBodyLength);
+            case ROW_OVERALL_WIDTH:  return fmm(rawData.partOverallWidth);
+            case ROW_OVERALL_LENGTH: return fmm(rawData.partOverallLength);
+            default:                 return "";
         }
     }
 
@@ -786,7 +803,7 @@ public class PartDbDetailsPanel extends JPanel {
         }
         @Override
         public boolean isCellEditable(int row, int col) {
-            return col == 1 && row <= ROW_BODY_LENGTH;
+            return col == 1 && row <= ROW_OVERALL_LENGTH;
         }
         @Override
         public void setValueAt(Object aValue, int row, int col) {
@@ -807,6 +824,16 @@ public class PartDbDetailsPanel extends JPanel {
                     case ROW_BODY_LENGTH:
                         if (part.getPackage() != null) {
                             part.getPackage().getFootprint().setBodyHeight(Double.parseDouble(s));
+                        }
+                        break;
+                    case ROW_OVERALL_WIDTH:
+                        if (part.getPackage() != null) {
+                            part.getPackage().getFootprint().setOverallWidth(Double.parseDouble(s));
+                        }
+                        break;
+                    case ROW_OVERALL_LENGTH:
+                        if (part.getPackage() != null) {
+                            part.getPackage().getFootprint().setOverallHeight(Double.parseDouble(s));
                         }
                         break;
                     default:
