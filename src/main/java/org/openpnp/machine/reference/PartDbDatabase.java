@@ -5,8 +5,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -223,6 +225,24 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
     public int getStockRefreshProgress() { return stockRefreshProgress; }
     public int getStockRefreshTotal()    { return stockRefreshTotal; }
 
+    /** Refreshes cached stock levels for only the given set of OpenPnP part IDs and fires "stockLevels". */
+    private void refreshStockForParts(Set<String> partIds) {
+        if (!connected || partIds.isEmpty()) {
+            firePropertyChange("stockLevels", null, stockCache);
+            return;
+        }
+        for (String partId : partIds) {
+            try {
+                JsonObject partData = findPartByName(partId);
+                int stock = partData.get("total_instock").getAsBigDecimal().intValue();
+                stockCache.put(partId, stock);
+            } catch (Exception e) {
+                // part not in PartDB or network error — skip silently
+            }
+        }
+        firePropertyChange("stockLevels", null, stockCache);
+    }
+
     /** Fetches stock levels for all known OpenPnP parts from PartDB and fires "stockLevels". */
     public void refreshStockLevels() {
         if (!connected) {
@@ -394,6 +414,7 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
             }
         }
         Map<Integer, Integer> lotsToFlush = new HashMap<>(pendingLotPlacements);
+        Set<String> lotPartIds = new HashSet<>(pendingLotPlacementsDisplay.keySet());
         pendingLotPlacements.clear();
         pendingLotPlacementsDisplay.clear();
         for (Map.Entry<Integer, Integer> entry : lotsToFlush.entrySet()) {
@@ -403,8 +424,10 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
                 Logger.warn("PartDB: could not flush lot {} stock: {}", entry.getKey(), e.getMessage());
             }
         }
-        // Refresh cache first so the table shows the new value and loses yellow simultaneously.
-        refreshStockLevels();
+        // Only re-fetch stock for the parts that were actually modified.
+        Set<String> affected = new HashSet<>(toFlush.keySet());
+        affected.addAll(lotPartIds);
+        refreshStockForParts(affected);
         firePropertyChange("pendingPlacements", null, pendingPlacements);
         Logger.info("PartDB: flushed stock for {} part(s), {} lot(s)", toFlush.size(), lotsToFlush.size());
     }

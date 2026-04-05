@@ -1507,6 +1507,9 @@ public class ReferencePushPullFeeder extends ReferenceFeeder {
         if (package1 == package2) {
             return true;
         }
+        if (package1 == null || package2 == null) {
+            return false;
+        }
         if ((package1.getTapeSpecification() != null && !package1.getTapeSpecification().isEmpty())
                 && package1.getTapeSpecification().equals(package2.getTapeSpecification())) {
             return true;
@@ -1589,6 +1592,16 @@ public class ReferencePushPullFeeder extends ReferenceFeeder {
     }
 
     public String getCloneTemplateStatus() {
+        try {
+            return getCloneTemplateStatusInternal();
+        }
+        catch (Exception e) {
+            Logger.warn("getCloneTemplateStatus failed: {}", e.getMessage());
+            return "<span><em>status unavailable</em></span>";
+        }
+    }
+
+    private String getCloneTemplateStatusInternal() {
         Part part = getPart();
         String status = "<span>";
         if (isUsedAsTemplate()) {
