@@ -564,13 +564,17 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         double heightMm = (height != null) ? height.convertToUnits(LengthUnit.Millimeters).getValue() : 0;
         double widthMm = 0;
         double lengthMm = 0;
+        double overallWidthMm = 0;
+        double overallLengthMm = 0;
         if (part.getPackage() != null && part.getPackage().getFootprint() != null) {
             Footprint fp = part.getPackage().getFootprint();
             widthMm = fp.getBodyWidth();
             lengthMm = fp.getBodyHeight(); // OpenPnP bodyHeight = PartDB "length"
+            overallWidthMm = fp.getOverallWidth();
+            overallLengthMm = fp.getOverallHeight();
         }
         try {
-            pushDimensionParameters(partDbId, heightMm, widthMm, lengthMm);
+            pushDimensionParameters(partDbId, heightMm, widthMm, lengthMm, overallWidthMm, overallLengthMm);
         } catch (Exception e) {
             Logger.warn("PartDB: could not push dimension parameters ({}): {}",
                     e.getClass().getSimpleName(), e.getMessage());
@@ -670,6 +674,8 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         public final Double fpBodyWidth;
         public final Double partBodyLength;
         public final Double fpBodyLength;
+        public final Double partOverallWidth;
+        public final Double partOverallLength;
         public final List<PartDbLot> lots;
 
         public PartDbRawData(int partDbId, String partName, String ipn, String mpn, String packageName,
@@ -678,6 +684,7 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
                 Double partHeight, Double fpHeight,
                 Double partBodyWidth, Double fpBodyWidth,
                 Double partBodyLength, Double fpBodyLength,
+                Double partOverallWidth, Double partOverallLength,
                 List<PartDbLot> lots) {
             this.partDbId = partDbId;
             this.partName = partName;
@@ -695,6 +702,8 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
             this.fpBodyWidth = fpBodyWidth;
             this.partBodyLength = partBodyLength;
             this.fpBodyLength = fpBodyLength;
+            this.partOverallWidth = partOverallWidth;
+            this.partOverallLength = partOverallLength;
             this.lots = lots != null ? lots : new ArrayList<>();
         }
     }
@@ -775,6 +784,8 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         Double partHeight = fetchParamValue(partParams, "height");
         Double partBodyWidth = fetchParamValue(partParams, "width");
         Double partBodyLength = fetchParamValue(partParams, "length");
+        Double partOverallWidth = fetchParamValue(partParams, "overall_width");
+        Double partOverallLength = fetchParamValue(partParams, "overall_length");
 
         String kicadFromFp = null;
         Double fpHeight = null;
@@ -815,6 +826,7 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         return new PartDbRawData(partId, dbPartName, ipn, mpn, packageName, description, thumbnailUrl, datasheetUrl,
                 kicadFromPart, kicadFromFp,
                 partHeight, fpHeight, partBodyWidth, fpBodyWidth, partBodyLength, fpBodyLength,
+                partOverallWidth, partOverallLength,
                 lots);
     }
 
@@ -903,6 +915,8 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         Length newHeight = null;
         Double newBodyWidth = null;
         Double newBodyLength = null;
+        Double newOverallWidth = null;
+        Double newOverallLength = null;
         boolean hasPartDbFootprint = false;
         if (data.has("id")) {
             try {
@@ -951,8 +965,10 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
                 }
 
                 // Resolve body dims and height from part params first, footprint params as fallback.
-                newBodyWidth  = resolveParamValue("width",  partParams, fpParams);
-                newBodyLength = resolveParamValue("length", partParams, fpParams);
+                newBodyWidth    = resolveParamValue("width",          partParams, fpParams);
+                newBodyLength   = resolveParamValue("length",         partParams, fpParams);
+                newOverallWidth  = resolveParamValue("overall_width",  partParams, fpParams);
+                newOverallLength = resolveParamValue("overall_length", partParams, fpParams);
                 Double h = resolveParamValue("height", partParams, fpParams);
                 if (h != null) {
                     newHeight = new Length(h, LengthUnit.Millimeters);
@@ -970,6 +986,8 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
         final Length fHeight = newHeight;
         final Double fBodyWidth = newBodyWidth;
         final Double fBodyLength = newBodyLength;
+        final Double fOverallWidth = newOverallWidth;
+        final Double fOverallLength = newOverallLength;
         final boolean fHasPartDbFootprint = hasPartDbFootprint;
         final boolean skipFootprint = isUpdate ? disableFootprintOnUpdate : disableFootprintOnImport;
 
@@ -990,6 +1008,12 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
                 }
                 if (fBodyLength != null) {
                     existing.getFootprint().setBodyHeight(fBodyLength);
+                }
+                if (fOverallWidth != null) {
+                    existing.getFootprint().setOverallWidth(fOverallWidth);
+                }
+                if (fOverallLength != null) {
+                    existing.getFootprint().setOverallHeight(fOverallLength);
                 }
                 if (fKicadFootprint != null
                         && (!fHasPartDbFootprint || autoApplyKicadPads
@@ -1047,10 +1071,11 @@ public class PartDbDatabase extends AbstractPartDatabase implements ProjectStora
      * Zero/negative values are skipped.
      */
     private void pushDimensionParameters(int partDbId,
-            double heightMm, double widthMm, double lengthMm) throws Exception {
-        String[] names   = {"height", "width",  "length"};
-        String[] symbols = {"h",      "w",      "l"};
-        double[] values  = {heightMm, widthMm,  lengthMm};
+            double heightMm, double widthMm, double lengthMm,
+            double overallWidthMm, double overallLengthMm) throws Exception {
+        String[] names   = {"height", "width",  "length",  "overall_width",  "overall_length"};
+        String[] symbols = {"h",      "w",      "l",       "W",              "L"};
+        double[] values  = {heightMm, widthMm,  lengthMm,  overallWidthMm,   overallLengthMm};
 
         boolean anyToPush = false;
         for (double v : values) {
