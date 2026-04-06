@@ -432,9 +432,21 @@ public class PackageVisionWizard extends AbstractConfigurationWizard {
                     if (ret != JOptionPane.YES_OPTION) {
                         return; // Abort.
                     }
-                    footprint.removeAllPads();
                 }
-                footprint.generate(type);
+                if (type == Footprint.Generator.Kicad) {
+                    // For KiCad: open picker first, only clear existing pads if a footprint was actually selected.
+                    List<Footprint.Pad> newPads = new org.openpnp.gui.importer.KicadModImporter().getPads();
+                    if (!newPads.isEmpty()) {
+                        footprint.removeAllPads();
+                        for (Footprint.Pad pad : newPads) {
+                            footprint.addPad(pad);
+                        }
+                    }
+                }
+                else {
+                    footprint.removeAllPads();
+                    footprint.generate(type);
+                }
             }
             finally {
                 tableModel.fireTableDataChanged();
